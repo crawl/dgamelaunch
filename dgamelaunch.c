@@ -449,10 +449,10 @@ inprogressmenu (int gameid)
 	  mvprintw(top_banner_hei,1," ");
 
 	  dgl_sortprintw(SORTMODE_USERNAME,    4, "Username")
-	  dgl_sortprintw(SORTMODE_GAMENUM,    21, "Game")
-	  dgl_sortprintw(SORTMODE_WINDOWSIZE, 29, "Size")
-	  dgl_sortprintw(SORTMODE_STARTTIME,  37, "Start date & time")
-	  dgl_sortprintw(SORTMODE_IDLETIME,   58, "Idle time")
+	  dgl_sortprintw(SORTMODE_GAMENUM,    26, "Game")
+	  dgl_sortprintw(SORTMODE_WINDOWSIZE, 40, "Size")
+	  dgl_sortprintw(SORTMODE_STARTTIME,  46, "Start date & time")
+	  dgl_sortprintw(SORTMODE_IDLETIME,   67, "Idle time")
 
 #undef dgl_sortprintw
       }
@@ -469,10 +469,10 @@ inprogressmenu (int gameid)
 	  if (is_nhext[i])
 	    strcpy (gametype, "  NhExt");
 	  else
-	    snprintf (gametype, sizeof gametype, "%3dx%3d",
+	    snprintf (gametype, sizeof gametype, "%3dx%2d",
 		games[i + offset]->ws_col, games[i + offset]->ws_row);
 
-          mvprintw (top_banner_hei + 1 + i, 1, "%c) %-15s  %-5s  %s  %s %s  %ldm %lds",
+          mvprintw (top_banner_hei + 1 + i, 1, "%c) %-20s  %-9s  %7s  %s %s  %ldm %lds",
                     selectorchars[i], games[i + offset]->name, myconfig[games[i + offset]->gamenum]->shortname, gametype,
                     games[i + offset]->date, games[i + offset]->time,
                     (time (&ctime) - games[i + offset]->idle_time) / 60,
@@ -489,10 +489,10 @@ inprogressmenu (int gameid)
 	      mvprintw ((btm+top_banner_hei), 1, "(%d-%d of %d)", offset + 1, offset + i, len);
 	  else
 	      mvprintw ((btm+top_banner_hei), 4, "(end)");
-	  mvaddstr ((btm+2+top_banner_hei), 1, "Watch which game? ('?' for help) => ");
+	  mvaddstr ((btm+2+top_banner_hei), 1, "Choose game to watch ('?' for help) => ");
       } else {
-	  mvprintw(top_banner_hei,4,"Sorry, no games available for viewing.");
-	  mvaddstr((btm+2+top_banner_hei), 1, "Press 'q' to return, or '?' for help => ");
+	  mvprintw(top_banner_hei, 1,"Sorry, no games available for viewing.");
+	  mvaddstr((2+top_banner_hei), 1, "Press 'q' to return to the main menu.");
       }
 
       refresh ();
