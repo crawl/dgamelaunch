@@ -1,0 +1,23 @@
+# vim:ft=conf
+# The above comment makes vim treat this file as a configuration file
+
+*.[oa]
+.depend
+
+# The DGameLaunch binary
+dgamelaunch
+
+# Auto-generated headers & files
+lex.yy.c
+y.tab.c
+y.tab.h
+
+# Auto-configuration junk
+Makefile
+autom4te.cache
+config.h
+config.h.in
+config.log
+config.status
+configure
+
