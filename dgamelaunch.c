@@ -50,6 +50,7 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>          /* ttyrec */
 #include <sys/stat.h>
+#include <sys/resource.h>       /* rlimit */
 #include <libgen.h>
 #include <stdlib.h>
 #include <curses.h>
@@ -1987,6 +1988,7 @@ main (int argc, char** argv)
   int userchoice;
   char *tmp;
   char *wall_email_str = NULL;
+  struct rlimit lim;
 
 #ifndef HAVE_SETPROCTITLE
   /* save argc, argv */
@@ -2081,6 +2083,20 @@ main (int argc, char** argv)
   /* get master tty just before chroot (lives in /dev) */
   if (!nhext && !nhauth)
     ttyrec_getpty ();
+
+  /* enable and set core dump size */
+  if (!getrlimit(RLIMIT_CORE, &lim))
+    {
+      lim.rlim_cur = 157286400;
+      setrlimit(RLIMIT_CORE, &lim);
+    }
+
+  /* set maximum memory usage */
+  if (!getrlimit(RLIMIT_AS, &lim))
+    {
+      lim.rlim_cur = 104857600;
+      setrlimit(RLIMIT_AS, &lim);
+    }
 
   if (geteuid () != globalconfig.shed_uid)
     {
