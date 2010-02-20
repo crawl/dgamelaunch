@@ -259,8 +259,8 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
 	    case 's':
 	      switch (stripped)
 	      {
-		case NO_GRAPHICS: populate_gfx_array ((stripped = DEC_GRAPHICS)); break;
-		case DEC_GRAPHICS: populate_gfx_array ((stripped = IBM_GRAPHICS)); break;
+		case NO_GRAPHICS: populate_gfx_array ((stripped = UNICODE_GRAPHICS)); break;
+		case UNICODE_GRAPHICS: populate_gfx_array ((stripped = IBM_GRAPHICS)); break;
 		case IBM_GRAPHICS: populate_gfx_array ((stripped = NO_GRAPHICS)); break;
 	      }
 	      return READ_RESTART;
@@ -291,13 +291,8 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
 void
 ttywrite (char *buf, int len)
 {
-  int i;
-
-  for (i = 0; i < len; i++)
-  {
-    if (stripped != NO_GRAPHICS)
-      buf[i] = strip_gfx (buf[i]);
-  }
+  if (stripped != NO_GRAPHICS)
+      buffer_strip_gfx (buf, &len);
 
   fwrite (buf, 1, len, stdout);
 }
