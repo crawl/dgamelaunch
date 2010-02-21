@@ -957,7 +957,7 @@ domailuser (char *username)
   mvaddstr (9, 1, "Scroll delivered!         ");
   move(9, 19); /* Pedantry! */
   refresh ();
-  sleep (2);
+  sleep (1);
 
   return;
 }
