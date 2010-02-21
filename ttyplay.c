@@ -373,7 +373,7 @@ find_seek_offset_clrscr (FILE * fp)
         {
           state = 3;
         }
-      else if ((buf[i] == 0x4a) && ((state == 2) || (state == 3)))
+      else if ((buf[i] == 0x4a) && (state == 3))
         {
           state = 4;
         }
