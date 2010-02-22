@@ -868,7 +868,7 @@ void
 domailuser (char *username)
 {
   unsigned int len, i;
-  char *spool_fn, message[81];
+  char *spool_fn, message[79];
   FILE *user_spool = NULL;
   time_t now;
   int mail_empty = 1;
@@ -895,10 +895,10 @@ domailuser (char *username)
   clear ();
   drawbanner (&banner, 1, 1);
   mvaddstr (5, 1,
-            "Enter your message here. It is to be one line only and 80 characters or less.");
-  mvaddstr (7, 1, "=> ");
+            "Enter your message here. It is to be one line only and 78 characters or less:");
+  mvaddstr (7, 1, "");
 
-  if (mygetnstr (message, 80, 1) != OK)
+  if (mygetnstr (message, 78, 1) != OK)
       return;
 
   for (i = 0; i < strlen (message); i++)
