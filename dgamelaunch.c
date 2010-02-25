@@ -50,7 +50,9 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>          /* ttyrec */
 #include <sys/stat.h>
-#include <sys/resource.h>       /* rlimit */
+#ifdef USE_RLIMIT
+#include <sys/resource.h>
+#endif
 #include <libgen.h>
 #include <stdlib.h>
 #include <curses.h>
@@ -831,7 +833,7 @@ wall_email(char *from, char *msg)
 	graceful_exit(121);
     }
 
-    if (strlen(msg) >= 80) {
+    if (strlen(msg) >= DGL_MAILMSGLEN) {
 	fprintf(stderr, "Error: wall: message too long!\n");
 	debug_write("wall: message too long");
 	graceful_exit(120);
@@ -868,7 +870,7 @@ void
 domailuser (char *username)
 {
   unsigned int len, i;
-  char *spool_fn, message[79];
+  char *spool_fn, message[DGL_MAILMSGLEN+1];
   FILE *user_spool = NULL;
   time_t now;
   int mail_empty = 1;
@@ -894,11 +896,12 @@ domailuser (char *username)
   /* print the enter your message line */
   clear ();
   drawbanner (&banner, 1, 1);
-  mvaddstr (5, 1,
-            "Enter your message here. It is to be one line only and 78 characters or less:");
+  mvprintw (5, 1,
+            "Enter your message here. It is to be one line only and %i characters or less.",
+	    DGL_MAILMSGLEN);
   mvaddstr (7, 1, "");
 
-  if (mygetnstr (message, 78, 1) != OK)
+  if (mygetnstr (message, DGL_MAILMSGLEN, 1) != OK)
       return;
 
   for (i = 0; i < strlen (message); i++)
@@ -1988,7 +1991,9 @@ main (int argc, char** argv)
   int userchoice;
   char *tmp;
   char *wall_email_str = NULL;
+#ifdef USE_RLIMIT
   struct rlimit lim;
+#endif
 
 #ifndef HAVE_SETPROCTITLE
   /* save argc, argv */
@@ -2084,19 +2089,22 @@ main (int argc, char** argv)
   if (!nhext && !nhauth)
     ttyrec_getpty ();
 
+#ifdef USE_RLIMIT
+#ifdef USE_RLIMIT_CORE
   /* enable and set core dump size */
-  if (!getrlimit(RLIMIT_CORE, &lim))
-    {
-      lim.rlim_cur = 157286400;
+  if (!getrlimit(RLIMIT_CORE, &lim)) {
+      lim.rlim_cur = USE_RLIMIT_CORE;
       setrlimit(RLIMIT_CORE, &lim);
-    }
-
+  }
+#endif
+#ifdef USE_RLIMIT_AS
   /* set maximum memory usage */
-  if (!getrlimit(RLIMIT_AS, &lim))
-    {
-      lim.rlim_cur = 104857600;
+  if (!getrlimit(RLIMIT_AS, &lim)) {
+      lim.rlim_cur = USE_RLIMIT_AS;
       setrlimit(RLIMIT_AS, &lim);
-    }
+  }
+#endif
+#endif
 
   if (geteuid () != globalconfig.shed_uid)
     {
