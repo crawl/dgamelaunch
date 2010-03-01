@@ -245,6 +245,7 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
     int counter = 0;
     fd_set readfs;
     int doread = 0;
+    int action = READ_DATA;
     static int tried_resize = 0;
 
 #ifdef HAVE_KQUEUE
@@ -260,7 +261,7 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
     /*
      * Read persistently just like tail -f.
      */
-    while (ttyread (fp, h, buf, 1) == READ_EOF)
+    while ((action = ttyread (fp, h, buf, 1)) == READ_EOF)
     {
         fflush(stdout);
         clearerr (fp);
@@ -319,7 +320,6 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
         if (doread)
         {                       /* user hits a character? */
             char c;
-            int action;
             read (STDIN_FILENO, &c, 1); /* drain the character */
 
             action = ttyplay_keyboard_action(c);
@@ -327,7 +327,7 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
                 return (action);
         }
     }
-    return READ_DATA;
+    return (action);
 }
 
 void
