@@ -194,7 +194,7 @@ ttyread (FILE * fp, Header * h, char **buf, int pread)
 
     if (kbhit())
     {
-        const int c = wgetch(stdscr);
+        const int c = dgl_getch();
         const int action = ttyplay_keyboard_action(c);
         if (action != READ_DATA)
             return (action);
@@ -263,6 +263,7 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
      */
     while ((action = ttyread (fp, h, buf, 1)) == READ_EOF)
     {
+        idle_alarm_reset();
         fflush(stdout);
         clearerr (fp);
 #ifdef HAVE_KQUEUE
@@ -319,9 +320,7 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
         }
         if (doread)
         {                       /* user hits a character? */
-            char c;
-            read (STDIN_FILENO, &c, 1); /* drain the character */
-
+            const int c = dgl_getch();
             action = ttyplay_keyboard_action(c);
             if (action != READ_DATA)
                 return (action);
