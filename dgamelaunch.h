@@ -124,6 +124,8 @@ struct dg_globalconfig
     struct dg_cmdpart *cmdqueue[NUM_DGLTIMES];
 
     struct dg_menulist *menulist;
+
+    int menu_max_idle_time_seconds;
 };
 
 typedef enum
@@ -220,6 +222,9 @@ extern struct dg_game **sort_games(struct dg_game **games, int len, dg_sortmode 
 
 int runmenuloop(struct dg_menu *menu);
 
+extern int dgl_getch(void);
+extern void idle_alarm_set_enabled(int enabled);
+extern void idle_alarm_reset(void);
 extern void inprogressmenu(int gameid);
 extern void change_email(void);
 extern int changepw(int dowrite);

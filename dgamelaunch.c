@@ -5,18 +5,18 @@
  * Brett Carrington <brettcar@segvio.org>,
  * Jilles Tjoelker <jilles@stack.nl>
  *
- * This program is free software; you can redistribute it and/or modify 
- * it under the terms of the GNU General Public License as published by 
- * the Free Software Foundation; either version 2 of the License, or 
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
- * 
- * This program is distributed in the hope that it will be useful, 
- * but WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the 
- * GNU General Public License for more details. 
- * 
- * You should have received a copy of the GNU General Public License 
- * along with this program; if not, write to the Free Software 
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
@@ -37,7 +37,7 @@
 
 /* a request from the author: please leave some remnance of
  * 'based on dgamelaunch version xxx' in any derivative works, or
- * even keep the line the same altogether. I'm probably happy 
+ * even keep the line the same altogether. I'm probably happy
  * to make any changes you need. */
 
 /* ************************************************************* */
@@ -96,6 +96,7 @@ extern int editor_main (int argc, char **argv);
 /* global variables */
 
 char * __progname;
+int  g_idle_alarm_enabled = 0;
 
 #ifndef USE_SQLITE3
 int f_num = 0;
@@ -128,7 +129,7 @@ mysetenv (const char* name, const char* value, int overwrite)
 {
   int retval;
   char *buf = NULL;
-  
+
   if (getenv(name) == NULL || overwrite)
   {
     size_t len = strlen(name) + 1 + strlen(value) + 1; /* NAME=VALUE\0 */
@@ -138,8 +139,8 @@ mysetenv (const char* name, const char* value, int overwrite)
   }
   else
     retval = -1;
-  
-  return retval;  
+
+  return retval;
 }
 #else /* use native setenv */
 # define mysetenv setenv
@@ -257,6 +258,41 @@ catch_sighup (int signum)
     }
   debug_write("catchup sighup");
   graceful_exit (2);
+}
+
+/* ************************************************************* */
+
+int
+dgl_getch(void)
+{
+    const int c = getch();
+    idle_alarm_reset();
+    return c;
+}
+
+/* ************************************************************* */
+
+static void
+dgl_idle_kill(int signal)
+{
+    kill(0, SIGHUP);
+}
+
+void
+idle_alarm_set_enabled(int enabled)
+{
+    signal(SIGALRM, SIG_IGN);
+    g_idle_alarm_enabled = enabled;
+    idle_alarm_reset();
+    if (enabled)
+        signal(SIGALRM, dgl_idle_kill);
+}
+
+void
+idle_alarm_reset(void)
+{
+    if (g_idle_alarm_enabled && globalconfig.menu_max_idle_time_seconds > 0)
+        alarm(globalconfig.menu_max_idle_time_seconds);
 }
 
 /* ************************************************************* */
@@ -499,7 +535,7 @@ inprogressmenu (int gameid)
 
       refresh ();
 
-      switch ((menuchoice = getch ()))
+      switch ((menuchoice = dgl_getch ()))
         {
 	case '*':
 	    if (len > 0) {
@@ -717,7 +753,7 @@ change_email ()
     else if (check_email (buf))
     {
       mvprintw (8, 1, "Changing email address to '%s'. Confirm (y/n): ", buf);
-      if (getch() == 'y')
+      if (dgl_getch() == 'y')
       {
 	free(me->email);
 	me->email = strdup(buf);
@@ -727,7 +763,7 @@ change_email ()
       else
       {
 	mvaddstr(9, 1, "No changes made. Press any key to continue...");
-	getch();
+	dgl_getch();
 	return;
       }
     }
@@ -915,7 +951,7 @@ domailuser (char *username)
       mvaddstr (9, 1, "This scroll appears to be blank.");
       mvaddstr (10, 1, "(Aborting your message.)");
       mvaddstr (12, 1, "--More--");
-      getch ();
+      dgl_getch ();
       return;
     }
 
@@ -927,7 +963,7 @@ domailuser (char *username)
                 "(Couldn't open %s'%c spool file.  Aborting.)",
                 username, (username[strlen (username) - 1] != 's') ? 's' : 0);
       mvaddstr (12, 1, "--More--");
-      getch ();
+      dgl_getch ();
       return;
     }
 
@@ -942,7 +978,7 @@ domailuser (char *username)
           mvaddstr (10, 1,
                     "(Received a weird error from fcntl.  Aborting.)");
 	  mvaddstr (12, 1, "--More--");
-          getch ();
+          dgl_getch ();
           return;
         }
       sleep (1);
@@ -950,7 +986,7 @@ domailuser (char *username)
 
   fprintf (user_spool, "%s:%s\n", me->username, message);
 
-  /* 
+  /*
    * Don't unlock the file ourselves, this way it will be done automatically
    * after all data has been written. (Using file locking with stdio is icky.)
    */
@@ -1092,7 +1128,7 @@ loginprompt (int from_ttyplay)
 	  setproctitle("%s", me->username);
       dgl_exec_cmdqueue(globalconfig.cmdqueue[DGLTIME_LOGIN], 0, me);
     }
-  else 
+  else
   {
     me = NULL;
     if (from_ttyplay == 1)
@@ -1101,7 +1137,7 @@ loginprompt (int from_ttyplay)
       refresh();
       sleep(2);
     }
-  } 
+  }
 }
 
 /* ************************************************************* */
@@ -1125,7 +1161,7 @@ newuser ()
       mvaddstr (5, 1, "Sorry, too many users have registered now.");
       mvaddstr (6, 1, "You might email the server administrator.");
       mvaddstr (7, 1, "Press return to return to the menu. ");
-      getch ();
+      dgl_getch ();
 
       return;
   }
@@ -1235,7 +1271,7 @@ newuser ()
         error = 0;
       else
         error = 1;
- 
+
       if (*buf == '\0')
       {
         free (me->username);
@@ -1811,7 +1847,7 @@ purge_stale_locks (int game)
 
 	for (seconds = HUP_WAIT - 1; seconds >= 0; seconds--)
 	{
-	  if (getch() != ERR)
+	  if (dgl_getch() != ERR)
 	  {
 	    nocbreak(); /* leave half-delay */
 	    cbreak();
@@ -1846,7 +1882,7 @@ purge_stale_locks (int game)
               mvprintw (3, 1,
                         "Couldn't terminate one of your stale %s processes gracefully.", myconfig[game]->game_name);
               mvaddstr (4, 1, "Force its termination? [yn] ");
-              if (tolower (getch ()) == 'y')
+              if (tolower (dgl_getch ()) == 'y')
                 {
                   kill (pid, SIGTERM);
                   break;
@@ -1871,7 +1907,6 @@ purge_stale_locks (int game)
   return 1;
 }
 
-
 int
 runmenuloop(struct dg_menu *menu)
 {
@@ -1885,6 +1920,7 @@ runmenuloop(struct dg_menu *menu)
     ban.lines = NULL;
     ban.len = 0;
 
+    idle_alarm_set_enabled(1);
     loadbanner(menu->banner_fn, &ban);
     while (1) {
 	if (doclear) {
@@ -1895,7 +1931,7 @@ runmenuloop(struct dg_menu *menu)
 	if (menu->cursor_x >= 0 && menu->cursor_y >= 0)
 	    mvprintw(menu->cursor_y, menu->cursor_x, "");
 	refresh();
-	userchoice = getch();
+	userchoice = dgl_getch();
 	if (userchoice == ERR) return 1;
 	tmpopt = menu->options;
 	while (tmpopt) {
@@ -2006,7 +2042,7 @@ main (int argc, char** argv)
   for (i = 0; i < argc; i++)
     saved_argv[i] = strdup(argv[i]);
   saved_argv[i] = '\0';
-  
+
   compat_init_setproctitle(argc, argv);
   argv = saved_argv;
 #endif
