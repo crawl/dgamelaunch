@@ -145,7 +145,7 @@ ttyplay_keyboard_action(int c)
     switch (c)
     {
     case 'q':
-        return READ_EOF;
+        return READ_QUIT;
     case 'r':
         if (term_resizex > 0 && term_resizey > 0) {
             printf ("\033[8;%d;%dt", term_resizey, term_resizex);

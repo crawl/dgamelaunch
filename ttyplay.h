@@ -15,5 +15,6 @@ typedef void (*WriteFunc) (char *buf, int len);
 #define READ_DATA	0 /* Data */
 #define READ_EOF	1 /* Normal EOF or user aborted */
 #define READ_RESTART	2 /* Screen must be redrawn (after simplemail) */
+#define READ_QUIT   3
 
 #endif /* !INCLUDED_ttyplay_h */
