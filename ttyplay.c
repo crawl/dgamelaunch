@@ -123,181 +123,211 @@ ttynowait (struct timeval prev, struct timeval cur, double speed)
 }
 
 int
+kbhit(void)
+{
+    int i = 0;
+    nodelay(stdscr, TRUE);
+    timeout(0);
+    i = wgetch(stdscr);
+    nodelay(stdscr, FALSE);
+
+    if (i == -1)
+        i = 0;
+    else
+        ungetch(i);
+    return (i);
+}
+
+int
+ttyplay_keyboard_action(int c)
+{
+    struct termios t;
+    switch (c)
+    {
+    case 'q':
+        return READ_EOF;
+    case 'r':
+        if (term_resizex > 0 && term_resizey > 0) {
+            printf ("\033[8;%d;%dt", term_resizey, term_resizex);
+            return READ_RESTART;
+        }
+        break;
+    case 's':
+        switch (stripped)
+        {
+        case NO_GRAPHICS: populate_gfx_array ((stripped = UNICODE_GRAPHICS)); break;
+        case UNICODE_GRAPHICS: populate_gfx_array ((stripped = IBM_GRAPHICS)); break;
+        case IBM_GRAPHICS: populate_gfx_array ((stripped = NO_GRAPHICS)); break;
+        }
+        return READ_RESTART;
+
+    case 'm':
+        tcgetattr (0, &t);
+        if (!loggedin)
+        {
+            initcurses();
+            loginprompt(1);
+        }
+        if (loggedin)
+        {
+            initcurses ();
+            domailuser (chosen_name);
+        }
+        endwin ();
+        tcsetattr (0, TCSANOW, &t);
+        return READ_RESTART;
+    case '?':
+        tcgetattr (0, &t);
+        initcurses();
+        (void) runmenuloop(dgl_find_menu("watchmenu_help"));
+        endwin ();
+        tcsetattr (0, TCSANOW, &t);
+        return READ_RESTART;
+    }
+    return (READ_DATA);
+}
+
+int
 ttyread (FILE * fp, Header * h, char **buf, int pread)
 {
-  long offset;
+    long offset;
 
-  /* do this BEFORE header read, hlen bug */
-  offset = ftell (fp);
-
-  if (read_header (fp, h) == 0)
+    if (kbhit())
     {
-      return READ_EOF;
+        const int c = wgetch(stdscr);
+        const int action = ttyplay_keyboard_action(c);
+        if (action != READ_DATA)
+            return (action);
     }
 
-  /* length should never be longer than one BUFSIZ */
-  if (h->len > BUFSIZ)
+    /* do this BEFORE header read, hlen bug */
+    offset = ftell (fp);
+
+    if (read_header (fp, h) == 0)
     {
-      fprintf (stderr, "h->len too big (%ld) limit %ld\n",
-		      (long)h->len, (long)BUFSIZ);
-      exit (-21);
+        return READ_EOF;
     }
 
-  *buf = malloc (h->len + 1);
-  if (*buf == NULL)
+    /* length should never be longer than one BUFSIZ */
+    if (h->len > BUFSIZ)
     {
-      perror ("malloc");
-      exit (-22);
+        fprintf (stderr, "h->len too big (%ld) limit %ld\n",
+                 (long)h->len, (long)BUFSIZ);
+        exit (-21);
     }
 
-  if (fread (*buf, 1, h->len, fp) != h->len)
+    *buf = malloc (h->len + 1);
+    if (*buf == NULL)
     {
-      fseek (fp, offset, SEEK_SET);
-      return READ_EOF;
+        perror ("malloc");
+        exit (-22);
     }
-  (*buf)[h->len] = 0;
-  return READ_DATA;
+
+    if (fread (*buf, 1, h->len, fp) != h->len)
+    {
+        fseek (fp, offset, SEEK_SET);
+        return READ_EOF;
+    }
+    (*buf)[h->len] = 0;
+    return READ_DATA;
 }
 
 int
 ttypread (FILE * fp, Header * h, char **buf, int pread)
 {
-  int n;
+    int n;
 #ifdef HAVE_KQUEUE
-  struct kevent evt[2];
-  static int kq = -1;
+    struct kevent evt[2];
+    static int kq = -1;
 #endif
-  struct timeval w = { 0, 100000 };
-  struct timeval origw = { 0, 100000 };
-  int counter = 0;
-  fd_set readfs;
-  struct termios t;
-  int doread = 0;
-  static int tried_resize = 0;
+    struct timeval w = { 0, 100000 };
+    struct timeval origw = { 0, 100000 };
+    int counter = 0;
+    fd_set readfs;
+    int doread = 0;
+    static int tried_resize = 0;
 
 #ifdef HAVE_KQUEUE
-  if (kq == -1)
-    kq = kqueue ();
-  if (kq == -1)
+    if (kq == -1)
+        kq = kqueue ();
+    if (kq == -1)
     {
-      printf ("kqueue() failed.\n");
-      exit (1);
+        printf ("kqueue() failed.\n");
+        exit (1);
     }
 #endif
 
-  /*
-   * Read persistently just like tail -f.
-   */
-  while (ttyread (fp, h, buf, 1) == READ_EOF)
+    /*
+     * Read persistently just like tail -f.
+     */
+    while (ttyread (fp, h, buf, 1) == READ_EOF)
     {
-      fflush(stdout);
-      clearerr (fp);
+        fflush(stdout);
+        clearerr (fp);
 #ifdef HAVE_KQUEUE
-      n = -1;
-      if (kq != -2)
-      {
-	EV_SET (&evt[0], STDIN_FILENO, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, NULL);
-	EV_SET (&evt[1], fileno (fp), EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, NULL);
-	n = kevent (kq, evt, 2, evt, 1, NULL);
-	doread = (n >= 1 && evt[0].ident == STDIN_FILENO &&
-	  evt[0].filter == EVFILT_READ) ||
-	  (n >= 2 && evt[1].ident == STDIN_FILENO &&
-	   evt[1].filter == EVFILT_READ);
-	if (n == -1)
-	  {
-	    /*
-	     * Perhaps kevent(2) doesn't work on this fstype,
-	     * use select(2) instead. Never use kevent again, assuming all
-	     * active ttyrecs are on the same fstype.
-	     */
-	    close(kq);
-	    kq = -2;
-	  }
-      }
-      if (n == -1)
-#endif
-      {
-	if (counter++ > (20 * 60 * 10))
-	  {
-	    /*
-	     * The reason for this timeout is that the select() method uses
-	     * some CPU in waiting. The kqueue() method does not do that, so it
-	     * does not need the timeout.
-	     */
-	    endwin ();
-	    printf ("Exiting due to 20 minutes of inactivity.\n");
-	    exit (-23);
-	  }
-	FD_ZERO (&readfs);
-	FD_SET (STDIN_FILENO, &readfs);
-	n = select (1, &readfs, NULL, NULL, &w);
-	w = origw;
-	doread = n >= 1 && FD_ISSET (0, &readfs);
-      }
-      if (n == -1)
-	{
-	    if ((errno == EINTR) && got_sigwinch) {
-		got_sigwinch = 0;
-		return READ_RESTART;
-	    } else {
-		printf("select()/kevent() failed.\n");
-		exit (1);
-	    }
-	}
-      if (doread)
-        {                       /* user hits a character? */
-          char c;
-          read (STDIN_FILENO, &c, 1); /* drain the character */
-
-          switch (c)
+        n = -1;
+        if (kq != -2)
+        {
+            EV_SET (&evt[0], STDIN_FILENO, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, NULL);
+            EV_SET (&evt[1], fileno (fp), EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, NULL);
+            n = kevent (kq, evt, 2, evt, 1, NULL);
+            doread = (n >= 1 && evt[0].ident == STDIN_FILENO &&
+                      evt[0].filter == EVFILT_READ) ||
+                (n >= 2 && evt[1].ident == STDIN_FILENO &&
+                 evt[1].filter == EVFILT_READ);
+            if (n == -1)
             {
-            case 'q':
-              return READ_EOF;
-              break;
-	    case 'r':
-		if (term_resizex > 0 && term_resizey > 0) {
-		    printf ("\033[8;%d;%dt", term_resizey, term_resizex);
-		    return READ_RESTART;
-		}
-		break;
-	    case 's':
-	      switch (stripped)
-	      {
-		case NO_GRAPHICS: populate_gfx_array ((stripped = UNICODE_GRAPHICS)); break;
-		case UNICODE_GRAPHICS: populate_gfx_array ((stripped = IBM_GRAPHICS)); break;
-		case IBM_GRAPHICS: populate_gfx_array ((stripped = NO_GRAPHICS)); break;
-	      }
-	      return READ_RESTART;
-	      break;
-
-            case 'm':
-	      tcgetattr (0, &t);
-	      if (!loggedin)
-	      {
-		initcurses();
-		loginprompt(1);
-	      }
-              if (loggedin)
-	      {
-		initcurses ();
-		domailuser (chosen_name);
-	      }
-              endwin ();
-	      tcsetattr (0, TCSANOW, &t);
-              return READ_RESTART;
-              break;
-            case '?':
-		tcgetattr (0, &t);
-		initcurses();
-		(void) runmenuloop(dgl_find_menu("watchmenu_help"));
-		endwin ();
-		tcsetattr (0, TCSANOW, &t);
-		return READ_RESTART;
-		break;
+                /*
+                 * Perhaps kevent(2) doesn't work on this fstype,
+                 * use select(2) instead. Never use kevent again, assuming all
+                 * active ttyrecs are on the same fstype.
+                 */
+                close(kq);
+                kq = -2;
             }
         }
+        if (n == -1)
+#endif
+        {
+            if (counter++ > (20 * 60 * 10))
+            {
+                /*
+                 * The reason for this timeout is that the select() method uses
+                 * some CPU in waiting. The kqueue() method does not do that, so it
+                 * does not need the timeout.
+                 */
+                endwin ();
+                printf ("Exiting due to 20 minutes of inactivity.\n");
+                exit (-23);
+            }
+            FD_ZERO (&readfs);
+            FD_SET (STDIN_FILENO, &readfs);
+            n = select (1, &readfs, NULL, NULL, &w);
+            w = origw;
+            doread = n >= 1 && FD_ISSET (0, &readfs);
+        }
+        if (n == -1)
+        {
+            if ((errno == EINTR) && got_sigwinch) {
+                got_sigwinch = 0;
+                return READ_RESTART;
+            } else {
+                printf("select()/kevent() failed.\n");
+                exit (1);
+            }
+        }
+        if (doread)
+        {                       /* user hits a character? */
+            char c;
+            int action;
+            read (STDIN_FILENO, &c, 1); /* drain the character */
+
+            action = ttyplay_keyboard_action(c);
+            if (action != READ_DATA)
+                return (action);
+        }
     }
-  return READ_DATA;
+    return READ_DATA;
 }
 
 void
@@ -465,15 +495,18 @@ void
 ttypeek (FILE * fp, double speed)
 {
   int r;
-
   do
   {
     setvbuf (fp, NULL, _IOFBF, 0);
-    ttyplay (fp, 0, ttyread, ttywrite, ttynowait, find_seek_offset_clrscr (fp));
-    clearerr (fp);
-    setvbuf (fp, NULL, _IONBF, 0);
-    fflush (stdout);
-    r = ttyplay (fp, speed, ttypread, ttywrite, ttynowait, -1);
+    r = ttyplay(fp, 0, ttyread, ttywrite, ttynowait,
+                find_seek_offset_clrscr(fp));
+    if (r == READ_EOF)
+    {
+        clearerr (fp);
+        setvbuf (fp, NULL, _IONBF, 0);
+        fflush (stdout);
+        r = ttyplay (fp, speed, ttypread, ttywrite, ttynowait, -1);
+    }
   } while (r == READ_RESTART);
 }
 
