@@ -30,7 +30,7 @@ WHITE		[\t ]*
   graceful_exit(1);
 }
 
-{NUMBER} { 
+{NUMBER} {
   yylval.i = strtoul(yytext, NULL, 10);
   return TYPE_NUMBER;
 }
@@ -44,7 +44,7 @@ WHITE		[\t ]*
 {MALSTRING} {
   yytext[yyleng - 1] = '\0'; /* remove trailing newline */
   fprintf(stderr, "%s:%d:%d: unterminated string constant: %s\n", config, line, col - yyleng + 1, yytext);
-  return TYPE_MALSTRING; 
+  return TYPE_MALSTRING;
 }
 
 {WHITE}		{ }
@@ -82,6 +82,7 @@ cursor		{ return TYPE_CURSOR; }
 "lockfile"	{ return TYPE_PATH_LOCKFILE; }
 "inprogressdir" { return TYPE_PATH_INPROGRESS; }
 "game_args"	{ return TYPE_GAME_ARGS; }
+"max_idle_time_seconds" { return TYPE_MAX_IDLE_TIME_SECONDS; }
 "rc_fmt"	{ return TYPE_RC_FMT; }
 "ttyrecdir"	{ return TYPE_PATH_TTYREC; }
 server_id	{ return TYPE_SERVER_ID; }

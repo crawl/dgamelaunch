@@ -45,7 +45,8 @@ struct dg_config defconfig = {
   /* num_args = */ 0,
   /* bin_args = */ NULL,
   /* rc_fmt = */ "%rrcfiles/%n.nethackrc", /* [dglroot]rcfiles/[username].nethackrc */
-  /* cmdqueue = */ NULL
+  /* cmdqueue = */ NULL,
+  /* max_idle_time_seconds = */ 0
 };
 
 char* config = NULL;
@@ -632,13 +633,13 @@ populate_games (int xgame, int *l, struct dg_user *me)
 graceful_exit (int status)
 {
   /*FILE *fp;
-     if (status != 1) 
-     { 
+     if (status != 1)
+     {
      fp = fopen ("/crash.log", "a");
      char buf[100];
      sprintf (buf, "graceful_exit called with status %d", status);
      fputs (buf, fp);
-     } 
+     }
      This doesn't work. Ever.
    */
   endwin();

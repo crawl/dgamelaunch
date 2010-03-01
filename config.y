@@ -41,6 +41,7 @@ static const char* lookup_token (int t);
 %token TYPE_PATH_PASSWD TYPE_PATH_LOCKFILE TYPE_PATH_TTYREC
 %token TYPE_MALSTRING TYPE_PATH_INPROGRESS TYPE_GAME_ARGS TYPE_RC_FMT
 %token TYPE_CMDQUEUE TYPE_DEFINE_MENU TYPE_BANNER_FILE TYPE_CURSOR
+%token TYPE_MAX_IDLE_TIME_SECONDS
 %token <s> TYPE_VALUE
 %token <i> TYPE_NUMBER TYPE_CMDQUEUENAME
 %type  <kt> KeyType
@@ -208,7 +209,7 @@ KeyPair: TYPE_CMDQUEUE '[' TYPE_CMDQUEUENAME ']'
 		break;
 	    default:
 		fprintf(stderr, "%s:%d: token %s does not take a boolean, bailing out\n",
-			config, line, lookup_token($1)); 
+			config, line, lookup_token($1));
 		exit(1);
 	    }
   	}
@@ -253,7 +254,7 @@ KeyPair: TYPE_CMDQUEUE '[' TYPE_CMDQUEUENAME ']'
 
     default:
       fprintf(stderr, "%s:%d: token %s does not take a number, bailing out\n",
-        config, line, lookup_token($1)); 
+        config, line, lookup_token($1));
       exit(1);
   }
 };
@@ -355,6 +356,10 @@ game_definition : TYPE_CMDQUEUE
 	{
 	    /* nothing */
 	}
+        | TYPE_MAX_IDLE_TIME_SECONDS '=' TYPE_NUMBER
+        {
+            myconfig[ncnf]->max_idle_time_seconds = $3;
+        }
 	| KeyType '=' TYPE_VALUE
 	{
 	    switch ( $1 ) {
@@ -561,6 +566,7 @@ const char* lookup_token (int t)
     case TYPE_PATH_TTYREC: return "ttyrecdir";
     case TYPE_PATH_INPROGRESS: return "inprogressdir";
     case TYPE_GAME_ARGS: return "game_args";
+    case TYPE_MAX_IDLE_TIME_SECONDS: return "max_idle_time_seconds";
     case TYPE_RC_FMT: return "rc_fmt";
     case TYPE_WATCH_SORTMODE: return "sortmode";
     case TYPE_SERVER_ID: return "server_id";
