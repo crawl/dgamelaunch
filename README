@@ -3,7 +3,11 @@ dgamelaunch
 
 dgamelaunch is a network-based game shell where anyone can sign up for an
 account and start playing any game which suits your fancy - currently, though,
-it only supports NetHack (see http://www.nethack.org).
+it only supports Crawl and NetHack (see http://crawl.develz.org and
+http://www.nethack.org).
+
+This is a fork of dgamelaunch customized for Crawl, although currently the
+only significant customization is non-ASCII character set stripping for Crawl.
 
 It requires GNU Make (often called gmake), a curses library and development
 headers to build and should compile without issue on Linux, Solaris, FreeBSD 4
