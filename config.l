@@ -88,6 +88,7 @@ cursor		{ return TYPE_CURSOR; }
 "ttyrecdir"	{ return TYPE_PATH_TTYREC; }
 server_id	{ return TYPE_SERVER_ID; }
 sortmode	{ return TYPE_WATCH_SORTMODE; }
+watch_columns   { return TYPE_WATCH_COLUMNS; }
 commands	{ return TYPE_CMDQUEUE; }
 yes		{ yylval.i = 1; return TYPE_BOOL; }
 no		{ yylval.i = 0; return TYPE_BOOL; }

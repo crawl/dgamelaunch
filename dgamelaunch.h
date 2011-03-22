@@ -23,6 +23,8 @@
 #define DGL_PASSWDLEN 20 /* max. length of passwords */
 #define DGL_MAILMSGLEN 78 /* max. length of mail message */
 
+#define DGL_MAXWATCHCOLS 10
+
 #ifdef USE_NCURSES_COLOR
 # define CLR_NORMAL  COLOR_PAIR(1)   | A_NORMAL
 # define CLR_RED     COLOR_PAIR(2)   | A_NORMAL
@@ -143,6 +145,14 @@ struct dg_config
     int max_idle_time;
 };
 
+struct dg_watchcols {
+    int dat;
+    int sortmode;
+    int x;
+    char *colname;
+    char *fmt;
+};
+
 struct dg_globalconfig
 {
     char* chroot;
@@ -161,6 +171,10 @@ struct dg_globalconfig
     char *server_id; /* string for the server name or whatever */
 
     struct dg_cmdpart *cmdqueue[NUM_DGLTIMES];
+
+    /* NULL terminated list of dg_watchcols pointers */
+    struct dg_watchcols *watch_columns[DGL_MAXWATCHCOLS + 1];
+    int n_watch_columns;
 
     struct dg_menulist *menulist;
     int menu_max_idle_time;
