@@ -4,9 +4,6 @@
 *.[oa]
 .depend
 
-# Config files
-dgamelaunch.conf
-
 # The DGameLaunch and editor binaries
 dgamelaunch
 ee
