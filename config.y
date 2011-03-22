@@ -41,7 +41,7 @@ static const char* lookup_token (int t);
 %token TYPE_PATH_PASSWD TYPE_PATH_LOCKFILE TYPE_PATH_TTYREC
 %token TYPE_MALSTRING TYPE_PATH_INPROGRESS TYPE_GAME_ARGS TYPE_RC_FMT
 %token TYPE_CMDQUEUE TYPE_DEFINE_MENU TYPE_BANNER_FILE TYPE_CURSOR
-%token TYPE_MAX_IDLE_TIME_SECONDS TYPE_MENU_MAX_IDLE_TIME_SECONDS
+%token TYPE_MAX_IDLE_TIME TYPE_MENU_MAX_IDLE_TIME
 %token <s> TYPE_VALUE
 %token <i> TYPE_NUMBER TYPE_CMDQUEUENAME
 %type  <kt> KeyType
@@ -252,8 +252,8 @@ KeyPair: TYPE_CMDQUEUE '[' TYPE_CMDQUEUENAME ']'
       }
       break;
 
-  case TYPE_MENU_MAX_IDLE_TIME_SECONDS:
-      globalconfig.menu_max_idle_time_seconds = $3;
+  case TYPE_MENU_MAX_IDLE_TIME:
+      globalconfig.menu_max_idle_time = $3;
       break;
 
     default:
@@ -360,9 +360,9 @@ game_definition : TYPE_CMDQUEUE
 	{
 	    /* nothing */
 	}
-        | TYPE_MAX_IDLE_TIME_SECONDS '=' TYPE_NUMBER
+        | TYPE_MAX_IDLE_TIME '=' TYPE_NUMBER
         {
-            myconfig[ncnf]->max_idle_time_seconds = $3;
+            myconfig[ncnf]->max_idle_time = $3;
         }
 	| KeyType '=' TYPE_VALUE
 	{
@@ -528,9 +528,7 @@ KeyType : TYPE_SUSER	{ $$ = TYPE_SUSER; }
 	| TYPE_SGID	{ $$ = TYPE_SGID; }
 	| TYPE_MAX	{ $$ = TYPE_MAX; }
 	| TYPE_MAXNICKLEN	{ $$ = TYPE_MAXNICKLEN; }
-        | TYPE_MENU_MAX_IDLE_TIME_SECONDS {
-            $$ = TYPE_MENU_MAX_IDLE_TIME_SECONDS;
-        }
+        | TYPE_MENU_MAX_IDLE_TIME	{ $$ = TYPE_MENU_MAX_IDLE_TIME; }
 	| TYPE_PATH_CHROOT	{ $$ = TYPE_PATH_CHROOT; }
 	| TYPE_ALLOW_REGISTRATION	{ $$ = TYPE_ALLOW_REGISTRATION; }
 	| TYPE_PATH_GAME	{ $$ = TYPE_PATH_GAME; }
@@ -561,7 +559,7 @@ const char* lookup_token (int t)
     case TYPE_SGID: return "shed_gid";
     case TYPE_MAX: return "maxusers";
     case TYPE_MAXNICKLEN: return "maxnicklen";
-    case TYPE_MENU_MAX_IDLE_TIME_SECONDS: return "menu_max_idle_time_seconds";
+    case TYPE_MENU_MAX_IDLE_TIME: return "menu_max_idle_time";
     case TYPE_PATH_CHROOT: return "chroot_path";
     case TYPE_PATH_GAME: return "game_path";
     case TYPE_NAME_GAME: return "game_name";
@@ -574,7 +572,7 @@ const char* lookup_token (int t)
     case TYPE_PATH_TTYREC: return "ttyrecdir";
     case TYPE_PATH_INPROGRESS: return "inprogressdir";
     case TYPE_GAME_ARGS: return "game_args";
-    case TYPE_MAX_IDLE_TIME_SECONDS: return "max_idle_time_seconds";
+    case TYPE_MAX_IDLE_TIME: return "max_idle_time";
     case TYPE_RC_FMT: return "rc_fmt";
     case TYPE_WATCH_SORTMODE: return "sortmode";
     case TYPE_SERVER_ID: return "server_id";

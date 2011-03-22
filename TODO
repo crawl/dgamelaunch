@@ -1,5 +1,15 @@
--change the watching-menu paging back to pre-1.5.0 behaviour
- (don't backtrack in the gamelist to keep the last page full)
+
+-move the games[] array into shmem?
+
+-$MTIME(filename)
+
+< Napkin> I'd suggest the default of DGL_MAILMSGLEN to be less
+< Napkin> there are 4 digits in front of the prompt, paxed. having
+   it at 80, will cause display errors if someone types more than 75 letters
+< Napkin> well, to be precise - not the writing - but deleting
+   will no longer work, because the cursor won't be moved to the previous
+   line again
+
 -when exiting from watching a player, move the cursor to the last line
  of the screen before enabling the ncurses mode; so when we exit dgl,
  the watched player's game is all visible and the menu prompt doesn't
@@ -20,8 +30,6 @@
  key not defined in other commands):
    commands[default] = ...
 
--in watching-menu, maybe we shouldn't pick players who have been
- idle for too long when randomly choosing one to watch.
 -change dgl-banner handling; we only use the top line of it nowadays...
  (maybe make that info config line: bannerline = "## $SERVERID" or something)
 -allow the admin to config the watching menu:
@@ -77,7 +85,7 @@
 -allow configuring ttyplay.c; some games may use different clear-screen
  commands. (see for example crawl)
 -allow configuring the gfx stripping. (number of chars, types of stripping,
- include unicode stripping from crawl dgl, etc)
+ include unicode stripping from crawl dgl, etc.)
  This must be per-game configs; maybe we're running nethack and crawl
  on the same server. ...does ttyplay know what game we're watching?
 
@@ -107,8 +115,6 @@ or maybe add a new command '' set_charstrip "name" ''
 -public (no-password) accounts? (a per-user flag) what happens when someone
  is playing on the account and someone else logins and we start playing?
 -allow users to run recover themselves
--make dgl show # of watchers. this would probably require adding a
- shared memory block to keep track of who is watching who...
 -configurable stuff: allowed chars in usernames,
  allow char stripping, ...
 

@@ -65,7 +65,7 @@ WHITE		[\t ]*
 "maxusers"	{ return TYPE_MAX; }
 "maxnicklen"	{ return TYPE_MAXNICKLEN; }
 "allow_new_nicks"	{ return TYPE_ALLOW_REGISTRATION; }
-menu_max_idle_time_seconds { return TYPE_MENU_MAX_IDLE_TIME_SECONDS; }
+"menu_max_idle_time"	{ return TYPE_MENU_MAX_IDLE_TIME; }
 
 
 menu		{ return TYPE_DEFINE_MENU; }
@@ -83,7 +83,7 @@ cursor		{ return TYPE_CURSOR; }
 "lockfile"	{ return TYPE_PATH_LOCKFILE; }
 "inprogressdir" { return TYPE_PATH_INPROGRESS; }
 "game_args"	{ return TYPE_GAME_ARGS; }
-"max_idle_time_seconds" { return TYPE_MAX_IDLE_TIME_SECONDS; }
+"max_idle_time"	{ return TYPE_MAX_IDLE_TIME; }
 "rc_fmt"	{ return TYPE_RC_FMT; }
 "ttyrecdir"	{ return TYPE_PATH_TTYREC; }
 server_id	{ return TYPE_SERVER_ID; }
@@ -109,7 +109,6 @@ watch_menu	{ yylval.i = DGLCMD_WATCH_MENU; return TYPE_DGLCMD0; }
 ask_login	{ yylval.i = DGLCMD_LOGIN;      return TYPE_DGLCMD0; }
 ask_register	{ yylval.i = DGLCMD_REGISTER;   return TYPE_DGLCMD0; }
 quit		{ yylval.i = DGLCMD_QUIT;       return TYPE_DGLCMD0; }
-edit_options	{ yylval.i = DGLCMD_EDITOPTIONS; return TYPE_DGLCMD1; }
 play_game	{ yylval.i = DGLCMD_PLAYGAME;    return TYPE_DGLCMD1; }
 submenu		{ yylval.i = DGLCMD_SUBMENU;     return TYPE_DGLCMD1; }
 return		{ yylval.i = DGLCMD_RETURN;      return TYPE_DGLCMD0; }

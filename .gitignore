@@ -4,8 +4,10 @@
 *.[oa]
 .depend
 
-# The DGameLaunch binary
+# The DGameLaunch and editor binaries
 dgamelaunch
+ee
+virus
 
 # Auto-generated headers & files
 lex.yy.c
@@ -21,3 +23,4 @@ config.log
 config.status
 configure
 
+TAGS

@@ -9,6 +9,10 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#ifdef USE_SHMEM
+#include <semaphore.h>
+#endif
+
 #ifndef ARRAY_SIZE
 # define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 #endif
@@ -18,6 +22,22 @@
 #define DGL_PLAYERNAMELEN 30 /* max. length of player name */
 #define DGL_PASSWDLEN 20 /* max. length of passwords */
 #define DGL_MAILMSGLEN 78 /* max. length of mail message */
+
+#ifdef USE_NCURSES_COLOR
+# define CLR_NORMAL  COLOR_PAIR(1)   | A_NORMAL
+# define CLR_RED     COLOR_PAIR(2)   | A_NORMAL
+#else
+# define CLR_NORMAL  0
+# define CLR_RED     0
+#endif
+
+typedef enum
+{
+    DGLACCT_ADMIN       = 0x01,	/* admin account */
+    DGLACCT_LOGIN_LOCK  = 0x02,	/* account is banned and cannot login */
+    DGLACCT_PASSWD_LOCK = 0x04,	/* account password cannot be changed */
+    DGLACCT_EMAIL_LOCK  = 0x08	/* account email cannot be changed */
+} dgl_acct_flag;
 
 typedef enum
 {
@@ -46,7 +66,7 @@ struct dg_user
   char *email;
   char *env;
   char *password;
-  int flags;
+  int flags;			/* dgl_acct_flag bitmask */
 };
 
 struct dg_banner
@@ -77,6 +97,22 @@ struct dg_menulist
     struct dg_menulist *next;
 };
 
+struct dg_shm
+{
+#ifdef USE_SHMEM
+    sem_t dg_sem;
+#endif
+    long max_n_games;
+    long cur_n_games;
+};
+
+struct dg_shm_game
+{
+    long  in_use;
+    long  nwatchers;
+    char  ttyrec_fn[150];
+};
+
 struct dg_game
 {
   char *ttyrec_fn;
@@ -86,6 +122,9 @@ struct dg_game
   time_t idle_time;
   int ws_row, ws_col; /* Window size */
   int gamenum;
+  int is_in_shm;
+  int shm_idx;
+  int nwatchers;
 };
 
 struct dg_config
@@ -101,7 +140,7 @@ struct dg_config
     char **bin_args; /* args for game binary */
     char *rc_fmt;
     struct dg_cmdpart *cmdqueue;
-    int max_idle_time_seconds;
+    int max_idle_time;
 };
 
 struct dg_globalconfig
@@ -124,8 +163,7 @@ struct dg_globalconfig
     struct dg_cmdpart *cmdqueue[NUM_DGLTIMES];
 
     struct dg_menulist *menulist;
-
-    int menu_max_idle_time_seconds;
+    int menu_max_idle_time;
 };
 
 typedef enum
@@ -144,7 +182,6 @@ typedef enum
     DGLCMD_QUIT,	/* quit */
     DGLCMD_CHMAIL,	/* chmail */
     DGLCMD_CHPASSWD,	/* chpasswd */
-    DGLCMD_EDITOPTIONS,	/* edit_options "foo" */
     DGLCMD_PLAYGAME,	/* play_game "foo" */
     DGLCMD_SUBMENU,	/* submenu "foo" */
     DGLCMD_RETURN	/* return */
@@ -158,6 +195,9 @@ typedef enum
     SORTMODE_WINDOWSIZE,
     SORTMODE_STARTTIME,
     SORTMODE_IDLETIME,
+#ifdef USE_SHMEM
+    SORTMODE_WATCHERS,
+#endif
     NUM_SORTMODES
 } dg_sortmode;
 
@@ -167,11 +207,16 @@ static const char *SORTMODE_NAME[NUM_SORTMODES] = {
     "Game",
     "Windowsize",
     "Starttime",
-    "Idletime"
+    "Idletime",
+#ifdef USE_SHMEM
+    "Watchers",
+#endif
 };
 
 
 /* Global variables */
+extern int shm_n_games; /* TODO: make configurable */
+
 extern char* config; /* file path */
 extern struct dg_config **myconfig;
 extern char *chosen_name;
@@ -194,6 +239,7 @@ extern int dgl_local_LINES;
 /* dgamelaunch.c */
 extern void create_config(void);
 extern void ttyrec_getmaster(void);
+extern char *get_mainmenu_name(void);
 extern char *gen_ttyrec_filename(void);
 extern char *gen_inprogress_lock(int game, pid_t pid, char *ttyrec_filename);
 extern void catch_sighup(int signum);
@@ -222,6 +268,15 @@ extern struct dg_game **sort_games(struct dg_game **games, int len, dg_sortmode 
 
 int runmenuloop(struct dg_menu *menu);
 
+extern void signals_block(void);
+extern void signals_release(void);
+
+extern void shm_sem_wait(struct dg_shm *shm_dg_data);
+extern void shm_sem_post(struct dg_shm *shm_dg_data);
+extern void shm_update(struct dg_shm *shm_dg_data, struct dg_game **games, int len);
+extern void shm_mk_keys(key_t *shm_key, key_t *shm_sem_key);
+extern void shm_init(struct dg_shm **shm_dg_data, struct dg_shm_game **shm_dg_game);
+
 extern int dgl_getch(void);
 extern void idle_alarm_set_enabled(int enabled);
 extern void idle_alarm_reset(void);
@@ -239,7 +294,6 @@ extern int passwordgood(char *cpw);
 extern int readfile(int nolock);
 extern struct dg_user *userexist(char *cname, int isnew);
 extern void write_canned_rcfile(int game, char *target);
-extern void editoptions(int game);
 extern void writefile(int requirenew);
 extern void graceful_exit(int status);
 extern int purge_stale_locks(int game);

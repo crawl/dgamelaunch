@@ -144,6 +144,7 @@ ttyplay_keyboard_action(int c)
     struct termios t;
     switch (c)
     {
+    case ERR:
     case 'q':
         return READ_QUIT;
     case 'r':
@@ -190,7 +191,16 @@ ttyplay_keyboard_action(int c)
 int
 ttyread (FILE * fp, Header * h, char **buf, int pread)
 {
-    long offset;
+  long offset;
+  int kb = kbhit();
+
+  if (kb == ERR) return READ_QUIT;
+  else if (kb) {
+      const int c = dgl_getch();
+      const int action = ttyplay_keyboard_action(c);
+      if (action != READ_DATA)
+	  return (action);
+  }
 
     if (kbhit())
     {
@@ -211,16 +221,16 @@ ttyread (FILE * fp, Header * h, char **buf, int pread)
     /* length should never be longer than one BUFSIZ */
     if (h->len > BUFSIZ)
     {
-        fprintf (stderr, "h->len too big (%ld) limit %ld\n",
-                 (long)h->len, (long)BUFSIZ);
-        exit (-21);
+      fprintf (stderr, "h->len too big (%ld) limit %ld\n",
+		      (long)h->len, (long)BUFSIZ);
+      return READ_QUIT;
     }
 
     *buf = malloc (h->len + 1);
     if (*buf == NULL)
     {
-        perror ("malloc");
-        exit (-22);
+      perror ("malloc");
+      return READ_QUIT;
     }
 
     if (fread (*buf, 1, h->len, fp) != h->len)
@@ -240,32 +250,31 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
     struct kevent evt[2];
     static int kq = -1;
 #endif
-    struct timeval w = { 0, 100000 };
-    struct timeval origw = { 0, 100000 };
-    int counter = 0;
-    fd_set readfs;
-    int doread = 0;
-    int action = READ_DATA;
-    static int tried_resize = 0;
+  struct timeval w = { 0, 100000 };
+  struct timeval origw = { 0, 100000 };
+  int counter = 0;
+  fd_set readfs;
+  int doread = 0;
+  int action = READ_DATA;
 
 #ifdef HAVE_KQUEUE
     if (kq == -1)
         kq = kqueue ();
     if (kq == -1)
     {
-        printf ("kqueue() failed.\n");
-        exit (1);
+      printf ("kqueue() failed.\n");
+      return READ_QUIT;
     }
 #endif
 
-    /*
-     * Read persistently just like tail -f.
-     */
-    while ((action = ttyread (fp, h, buf, 1)) == READ_EOF)
+  /*
+   * Read persistently just like tail -f.
+   */
+  while ((action = ttyread (fp, h, buf, 1)) == READ_EOF)
     {
-        idle_alarm_reset();
-        fflush(stdout);
-        clearerr (fp);
+      idle_alarm_reset();
+      fflush(stdout);
+      clearerr (fp);
 #ifdef HAVE_KQUEUE
         n = -1;
         if (kq != -2)
@@ -290,43 +299,44 @@ ttypread (FILE * fp, Header * h, char **buf, int pread)
         }
         if (n == -1)
 #endif
-        {
-            if (counter++ > (20 * 60 * 10))
-            {
-                /*
-                 * The reason for this timeout is that the select() method uses
-                 * some CPU in waiting. The kqueue() method does not do that, so it
-                 * does not need the timeout.
-                 */
-                endwin ();
-                printf ("Exiting due to 20 minutes of inactivity.\n");
-                exit (-23);
-            }
-            FD_ZERO (&readfs);
-            FD_SET (STDIN_FILENO, &readfs);
-            n = select (1, &readfs, NULL, NULL, &w);
-            w = origw;
-            doread = n >= 1 && FD_ISSET (0, &readfs);
-        }
-        if (n == -1)
-        {
-            if ((errno == EINTR) && got_sigwinch) {
-                got_sigwinch = 0;
-                return READ_RESTART;
-            } else {
-                printf("select()/kevent() failed.\n");
-                exit (1);
-            }
-        }
-        if (doread)
+      {
+	if (counter++ > (20 * 60 * 10))
+	  {
+	    /*
+	     * The reason for this timeout is that the select() method uses
+	     * some CPU in waiting. The kqueue() method does not do that, so it
+	     * does not need the timeout.
+	     */
+	    endwin ();
+	    printf ("Exiting due to 20 minutes of inactivity.\n");
+	    return READ_QUIT;
+	  }
+	FD_ZERO (&readfs);
+	FD_SET (STDIN_FILENO, &readfs);
+	n = select (1, &readfs, NULL, NULL, &w);
+	w = origw;
+	doread = n >= 1 && FD_ISSET (0, &readfs);
+      }
+      if (n == -1)
+	{
+	    if ((errno == EINTR) && got_sigwinch) {
+		got_sigwinch = 0;
+		return READ_RESTART;
+	    } else {
+		printf("select()/kevent() failed.\n");
+		return READ_QUIT;
+	    }
+	}
+      if (doread)
         {                       /* user hits a character? */
-            const int c = dgl_getch();
-            action = ttyplay_keyboard_action(c);
-            if (action != READ_DATA)
-                return (action);
+	  const int c = dgl_getch();
+	  action = ttyplay_keyboard_action(c);
+	  if (action != READ_DATA)
+	      return action;
+
         }
     }
-    return (action);
+  return (action);
 }
 
 void
@@ -384,7 +394,7 @@ ttyplay (FILE * fp, double speed, ReadFunc read_func,
 
 // Subsequence must be less than 512 bytes!
 static off_t
-find_last_string_in_file(FILE *fp, const char *seq)
+find_last_string_in_file(FILE * fp, const char *seq)
 {
     char buf[512];
     struct stat mystat;
@@ -443,9 +453,12 @@ static off_t
 find_seek_offset_clrscr (FILE * fp)
 {
   off_t raw_seek_offset = 0;
+  off_t raw_seek_offset2 = 0;
   off_t seek_offset_clrscr;
 
   raw_seek_offset = find_last_string_in_file(fp, "\033[2J");
+  raw_seek_offset2 = find_last_string_in_file(fp, "\033[H\033[J");
+  if (raw_seek_offset2>raw_seek_offset) raw_seek_offset=raw_seek_offset2;
 
   seek_offset_clrscr = 0;
   /* now find last filepos that is less than seek offset */
@@ -497,11 +510,9 @@ ttypeek (FILE * fp, double speed)
   do
   {
     setvbuf (fp, NULL, _IOFBF, 0);
-    r = ttyplay(fp, 0, ttyread, ttywrite, ttynowait,
-                find_seek_offset_clrscr(fp));
-    if (r == READ_EOF)
-    {
-        clearerr (fp);
+    r = ttyplay(fp, 0, ttyread, ttywrite, ttynowait, find_seek_offset_clrscr(fp));
+    if (r == READ_EOF) {
+	clearerr (fp);
         setvbuf (fp, NULL, _IONBF, 0);
         fflush (stdout);
         r = ttyplay (fp, speed, ttypread, ttywrite, ttynowait, -1);
@@ -530,7 +541,7 @@ ttyplay_main (char *ttyfile, int mode, int resizex, int resizey)
   new.c_cc[VMIN] = 1;
   new.c_cc[VTIME] = 0;
   tcsetattr (0, TCSANOW, &new); /* Make it current */
-
+  raw();
 
   if (resizex > 0 && resizey > 0) {
       term_resizex = resizex;
@@ -552,6 +563,8 @@ ttyplay_main (char *ttyfile, int mode, int resizex, int resizey)
       signal(SIGWINCH, old_sigwinch);
 
   term_resizex = term_resizey = -1;
+
+  printf("\033[2J"); /* clear screen afterwards */
 
   return 0;
 }

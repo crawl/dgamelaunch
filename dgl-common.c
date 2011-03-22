@@ -46,7 +46,7 @@ struct dg_config defconfig = {
   /* bin_args = */ NULL,
   /* rc_fmt = */ "%rrcfiles/%n.nethackrc", /* [dglroot]rcfiles/[username].nethackrc */
   /* cmdqueue = */ NULL,
-  /* max_idle_time_seconds = */ 0
+  /* max_idle_time = */ 0
 };
 
 char* config = NULL;
@@ -54,6 +54,8 @@ int silent = 0;
 int loggedin = 0;
 char *chosen_name;
 int num_games = 0;
+
+int shm_n_games = 200;
 
 int dgl_local_COLS = -1, dgl_local_LINES = -1;
 int curses_resize = 0;
@@ -80,7 +82,6 @@ term_resize_check()
 
     endwin();
     initcurses();
-    refresh();
     dgl_local_COLS = COLS;
     dgl_local_LINES = LINES;
     curses_resize = 0;
@@ -136,6 +137,13 @@ dgl_format_str(int game, struct dg_user *me, char *str, char *plrname)
 		snprintf (p, end + 1 - p, "%d", globalconfig.shed_uid);
 		while (*p != '\0')
 		    p++;
+		break;
+	    case 'N':
+		if (me) *p = me->username[0];
+		else if (plrname) *p = plrname[0];
+		else return NULL;
+		p++;
+		*p = '\0';
 		break;
   	    case 'n':
 		if (me) snprintf (p, end + 1 - p, "%s", me->username);
@@ -213,7 +221,12 @@ dgl_exec_cmdqueue(struct dg_cmdpart *queue, int game, struct dg_user *me)
 	    if (p1 && (access(p1, F_OK) != 0)) unlink(p1);
 	    break;
 	case DGLCMD_CHDIR:
-	    if (p1) chdir(p1);
+	    if (p1) {
+		if (chdir(p1) == -1) {
+		    debug_write("chdir-command failed");
+		    graceful_exit(123);
+		}
+	    }
 	    break;
 	case DGLCMD_IF_NX_CP:
 	    if (p1 && p2) {
@@ -256,8 +269,10 @@ dgl_exec_cmdqueue(struct dg_cmdpart *queue, int game, struct dg_user *me)
 		myargv[1] = p2;
 		myargv[2] = 0;
 
+		clear();
+		refresh();
 		endwin();
-                idle_alarm_set_enabled(0);
+		idle_alarm_set_enabled(0);
 		child = fork();
 		if (child == -1) {
 		    perror("fork");
@@ -268,8 +283,8 @@ dgl_exec_cmdqueue(struct dg_cmdpart *queue, int game, struct dg_user *me)
 		    exit(0);
 		} else
 		    waitpid(child, NULL, 0);
-                idle_alarm_set_enabled(1);
-		refresh();
+		idle_alarm_set_enabled(1);
+		initcurses();
 		check_retard(1);
 	    }
 	    break;
@@ -287,7 +302,7 @@ dgl_exec_cmdqueue(struct dg_cmdpart *queue, int game, struct dg_user *me)
 	    break;
 	case DGLCMD_LOGIN:
 	    if (!loggedin) loginprompt(0);
-	    if (loggedin) runmenuloop(dgl_find_menu("mainmenu_user"));
+	    if (loggedin) runmenuloop(dgl_find_menu(get_mainmenu_name()));
 	    break;
 	case DGLCMD_REGISTER:
 	    if (!loggedin && globalconfig.allow_registration) newuser();
@@ -303,20 +318,6 @@ dgl_exec_cmdqueue(struct dg_cmdpart *queue, int game, struct dg_user *me)
 	case DGLCMD_RETURN:
 	    return_from_submenu = 1;
 	    break;
-	case DGLCMD_EDITOPTIONS:
-	    if (loggedin && p1) {
-		int i;
-		for (i = 0; i < num_games; i++) {
-		    if ((!strcmp(myconfig[i]->game_name, p1) || !strcmp(myconfig[i]->shortname, p1)) && myconfig[i]->rcfile) {
-                        idle_alarm_set_enabled(0);
-			editoptions(i);
-                        idle_alarm_set_enabled(1);
-			check_retard(1);
-			break;
-		    }
-		}
-	    }
-	    break;
 	case DGLCMD_PLAYGAME:
 	    if (loggedin && me && p1) {
 		int userchoice, i;
@@ -331,8 +332,9 @@ dgl_exec_cmdqueue(struct dg_cmdpart *queue, int game, struct dg_user *me)
 
 			    setproctitle("%s [playing %s]", me->username, myconfig[userchoice]->shortname);
 
+			    clear();
+			    refresh();
 			    endwin ();
-			    signal(SIGWINCH, SIG_DFL);
 
 			    /* first run the generic "do these when a game is started" commands */
 			    dgl_exec_cmdqueue(globalconfig.cmdqueue[DGLTIME_GAMESTART], userchoice, me);
@@ -346,13 +348,23 @@ dgl_exec_cmdqueue(struct dg_cmdpart *queue, int game, struct dg_user *me)
 				myconfig[userchoice]->bin_args[i] = tmpstr;
 			    }
 
-                            idle_alarm_set_enabled(0);
+			    signal(SIGWINCH, SIG_DFL);
+			    signal(SIGINT, SIG_DFL);
+			    signal(SIGQUIT, SIG_DFL);
+			    signal(SIGTERM, SIG_DFL);
+			    idle_alarm_set_enabled(0);
 			    /* launch program */
 			    ttyrec_main (userchoice, me->username,
 					 dgl_format_str(userchoice, me, myconfig[userchoice]->ttyrecdir, NULL),
 					 gen_ttyrec_filename());
-
+			    idle_alarm_set_enabled(1);
 			    /* lastly, run the generic "do these when a game is left" commands */
+			    signal (SIGHUP, catch_sighup);
+			    signal (SIGINT, catch_sighup);
+			    signal (SIGQUIT, catch_sighup);
+			    signal (SIGTERM, catch_sighup);
+			    signal(SIGWINCH, sigwinch_func);
+
 			    dgl_exec_cmdqueue(globalconfig.cmdqueue[DGLTIME_GAMEEND], userchoice, me);
                             idle_alarm_set_enabled(1);
 
@@ -385,11 +397,15 @@ sort_game_username(const void *g1, const void *g2)
     return strcasecmp(game1->name, game2->name);
 }
 
+time_t sort_ctime;
+
 static int
 sort_game_idletime(const void *g1, const void *g2)
 {
     const struct dg_game *game1 = *(const struct dg_game **)g1;
     const struct dg_game *game2 = *(const struct dg_game **)g2;
+    if ((sort_ctime - game1->idle_time < 5) && (sort_ctime - game2->idle_time < 5))
+	return strcasecmp(game1->name, game2->name);
     if (game2->idle_time != game1->idle_time)
 	return difftime(game2->idle_time, game1->idle_time);
     else
@@ -432,6 +448,21 @@ sort_game_starttime(const void *g1, const void *g2)
     return i;
 }
 
+static int
+sort_game_watchers(const void *g1, const void *g2)
+{
+    const struct dg_game *game1 = *(const struct dg_game **)g1;
+    const struct dg_game *game2 = *(const struct dg_game **)g2;
+    int i = dglsign(game2->nwatchers - game1->nwatchers);
+    if (!i && (sort_ctime - game1->idle_time < 5) && (sort_ctime - game2->idle_time < 5))
+	return strcasecmp(game1->name, game2->name);
+    if (!i)
+	i = dglsign(game2->idle_time - game1->idle_time);
+    if (!i)
+	return strcasecmp(game1->name, game2->name);
+    return i;
+}
+
 struct dg_game **
 sort_games (struct dg_game **games, int len, dg_sortmode sortmode)
 {
@@ -439,8 +470,17 @@ sort_games (struct dg_game **games, int len, dg_sortmode sortmode)
     case SORTMODE_USERNAME: qsort(games, len, sizeof(struct dg_game *), sort_game_username); break;
     case SORTMODE_GAMENUM: qsort(games, len, sizeof(struct dg_game *), sort_game_gamenum); break;
     case SORTMODE_WINDOWSIZE: qsort(games, len, sizeof(struct dg_game *), sort_game_windowsize); break;
-    case SORTMODE_IDLETIME: qsort(games, len, sizeof(struct dg_game *), sort_game_idletime); break;
+    case SORTMODE_IDLETIME:
+	(void) time(&sort_ctime);
+	qsort(games, len, sizeof(struct dg_game *), sort_game_idletime);
+	break;
     case SORTMODE_STARTTIME: qsort(games, len, sizeof(struct dg_game *), sort_game_starttime); break;
+#ifdef USE_SHMEM
+    case SORTMODE_WATCHERS:
+	(void) time(&sort_ctime);
+	qsort(games, len, sizeof(struct dg_game *), sort_game_watchers);
+	break;
+#endif
     default: ;
     }
     return games;
@@ -478,7 +518,7 @@ free_populated_games(struct dg_game **games, int len)
 struct dg_game **
 populate_games (int xgame, int *l, struct dg_user *me)
 {
-  int fd, len, n, is_nhext, pid;
+  int fd, len, n, pid;
   DIR *pdir;
   struct dirent *pdirent;
   struct stat pstat;
@@ -512,8 +552,6 @@ populate_games (int xgame, int *l, struct dg_user *me)
       if (!strcmp (pdirent->d_name, ".") || !strcmp (pdirent->d_name, ".."))
         continue;
 
-      is_nhext = !strcmp (pdirent->d_name + strlen (pdirent->d_name) - 6, ".nhext");
-
       inprog = dgl_format_str(game, me, myconfig[game]->inprogressdir, NULL);
 
       if (!inprog) continue;
@@ -524,12 +562,8 @@ populate_games (int xgame, int *l, struct dg_user *me)
       /* O_RDWR here should be O_RDONLY, but we need to test for
        * an exclusive lock */
       fd = open (fullname, O_RDWR);
-      if (fd >= 0 && (is_nhext || fcntl (fd, F_SETLK, &fl) == -1))
+      if (fd >= 0 && (fcntl (fd, F_SETLK, &fl) == -1))
         {
-
-          /* stat to check idle status */
-	  if (!is_nhext)
-	    {
 		char *ttrecdir = NULL;
 		strncpy(playername, pdirent->d_name, DGL_PLAYERNAMELEN);
 		playername[DGL_PLAYERNAMELEN] = '\0';
@@ -546,8 +580,8 @@ populate_games (int xgame, int *l, struct dg_user *me)
 	      ttrecdir = dgl_format_str(game, me, myconfig[game]->ttyrecdir, playername);
 	      if (!ttrecdir) continue;
               snprintf (ttyrecname, 130, "%s%s", ttrecdir, replacestr);
-	    }
-          if (is_nhext || !stat (ttyrecname, &pstat))
+
+          if (!stat (ttyrecname, &pstat))
             {
               /* now it's a valid game for sure */
               games = realloc (games, sizeof (struct dg_game) * (len + 1));
@@ -573,6 +607,9 @@ populate_games (int xgame, int *l, struct dg_user *me)
               games[len]->idle_time = pstat.st_mtime;
 
 	      games[len]->gamenum = game;
+	      games[len]->is_in_shm = 0;
+	      games[len]->nwatchers = 0;
+	      games[len]->shm_idx = -1;
 
 	      n = read(fd, pidws, sizeof(pidws) - 1);
 	      if (n > 0)
@@ -593,30 +630,12 @@ populate_games (int xgame, int *l, struct dg_user *me)
 	      if (*p != '\0')
 	        p++;
 	      games[len]->ws_col = atoi(p);
-	      if (is_nhext)
-	        {
-		  if (kill (pid, 0) != 0)
-		    {
-		      /* Dead game */
-		      free (games[len]->ttyrec_fn);
-		      free (games[len]->name);
-		      free (games[len]->date);
-		      free (games[len]->time);
-		      free (games[len]);
-		      unlink (fullname);
-		    }
-		  else
-		    len++;
-		}
-	      else
-	        {
-		  if (games[len]->ws_row < 4 || games[len]->ws_col < 4)
-		  {
-		    games[len]->ws_row = 24;
-		    games[len]->ws_col = 80;
-		  }
-		  len++;
-		}
+
+	      if (games[len]->ws_row < 4 || games[len]->ws_col < 4) {
+		  games[len]->ws_row = 24;
+		  games[len]->ws_col = 80;
+	      }
+	      len++;
             }
         }
       else

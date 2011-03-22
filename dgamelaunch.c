@@ -41,8 +41,6 @@
  * to make any changes you need. */
 
 /* ************************************************************* */
-/* ************************************************************* */
-/* ************************************************************* */
 
 /* program stuff */
 #include <sys/types.h>
@@ -53,6 +51,12 @@
 #ifdef USE_RLIMIT
 #include <sys/resource.h>
 #endif
+
+#ifdef USE_SHMEM
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#endif
+
 #include <libgen.h>
 #include <stdlib.h>
 #include <curses.h>
@@ -90,8 +94,6 @@
 
 extern FILE* yyin;
 extern int yyparse ();
-
-extern int editor_main (int argc, char **argv);
 
 /* global variables */
 
@@ -176,6 +178,47 @@ ttyrec_getpty ()
 
 /* ************************************************************* */
 
+static int dgl_signal_blocked = 0;
+static sigset_t dgl_signal_blockmask;
+static sigset_t dgl_signal_oldmask;
+
+void
+signals_block()
+{
+    if (!dgl_signal_blocked) {
+	sigemptyset(&dgl_signal_blockmask);
+	sigaddset(&dgl_signal_blockmask, SIGHUP);
+	sigaddset(&dgl_signal_blockmask, SIGINT);
+	sigaddset(&dgl_signal_blockmask, SIGQUIT);
+	sigaddset(&dgl_signal_blockmask, SIGTERM);
+	sigprocmask(SIG_BLOCK, &dgl_signal_blockmask, &dgl_signal_oldmask);
+	dgl_signal_blocked = 1;
+    }
+}
+
+void
+signals_release()
+{
+    if (dgl_signal_blocked) {
+	sigprocmask(SIG_SETMASK, &dgl_signal_oldmask, NULL);
+	dgl_signal_blocked = 0;
+    }
+}
+
+
+/* ************************************************************* */
+
+char *
+get_mainmenu_name()
+{
+    if (loggedin) {
+	if (me && (me->flags & DGLACCT_ADMIN)) return "mainmenu_admin";
+	return "mainmenu_user";
+    }
+    return "mainmenu_anon";
+}
+
+
 char*
 gen_ttyrec_filename ()
 {
@@ -195,33 +238,17 @@ gen_ttyrec_filename ()
 /* ************************************************************* */
 
 char*
-gen_nhext_filename ()
-{
-  time_t rawtime;
-  struct tm *ptm;
-  char *nhext_filename = calloc(100, sizeof(char));
-
-  /* append time to filename */
-  time (&rawtime);
-  ptm = gmtime (&rawtime);
-  snprintf (nhext_filename, 100, "%04i-%02i-%02i.%02i:%02i:%02i.nhext",
-            ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
-            ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
-  return nhext_filename;
-}
-
-/* ************************************************************* */
-
-char*
 gen_inprogress_lock (int game, pid_t pid, char* ttyrec_filename)
 {
   char *lockfile = NULL, filebuf[80];
   int fd;
-  size_t len;
+  size_t len, wrlen;
   struct flock fl = { 0 };
 
   snprintf (filebuf, sizeof(filebuf), "%d\n%d\n%d\n",
 		  pid, win.ws_row, win.ws_col);
+
+  wrlen = strlen(filebuf);
 
   fl.l_type = F_WRLCK;
   fl.l_whence = SEEK_SET;
@@ -240,12 +267,20 @@ gen_inprogress_lock (int game, pid_t pid, char* ttyrec_filename)
     graceful_exit (68);
   }
 
-  write (fd, filebuf, strlen (filebuf));
+  if (write (fd, filebuf, wrlen) != wrlen) {
+      debug_write("inprogress-lock write");
+      graceful_exit(70);
+  }
 
   return lockfile;
 }
 
 /* ************************************************************* */
+
+#ifdef USE_SHMEM
+int hup_shm_idx = -1;
+char *hup_shm_ttyrec_fn = NULL;
+#endif
 
 void
 catch_sighup (int signum)
@@ -256,6 +291,25 @@ catch_sighup (int signum)
       kill (child, SIGHUP);
       sleep (5);
     }
+#ifdef USE_SHMEM
+  signals_block();
+  if (hup_shm_idx != -1) {
+      struct dg_shm *shm_dg_data = NULL;
+      struct dg_shm_game *shm_dg_game = NULL;
+      shm_init(&shm_dg_data, &shm_dg_game);
+
+      shm_sem_wait(shm_dg_data);
+      if (shm_dg_game[hup_shm_idx].in_use &&
+	  !strcmp(shm_dg_game[hup_shm_idx].ttyrec_fn, hup_shm_ttyrec_fn) &&
+	  (shm_dg_game[hup_shm_idx].nwatchers > 0)) {
+	  shm_dg_game[hup_shm_idx].nwatchers--;
+      }
+      shm_sem_post(shm_dg_data);
+      hup_shm_idx = -1;
+      free(hup_shm_ttyrec_fn);
+  }
+  signals_release();
+#endif
   debug_write("catchup sighup");
   graceful_exit (2);
 }
@@ -291,8 +345,8 @@ idle_alarm_set_enabled(int enabled)
 void
 idle_alarm_reset(void)
 {
-    if (g_idle_alarm_enabled && globalconfig.menu_max_idle_time_seconds > 0)
-        alarm(globalconfig.menu_max_idle_time_seconds);
+    if (g_idle_alarm_enabled && globalconfig.menu_max_idle_time > 0)
+        alarm(globalconfig.menu_max_idle_time);
 }
 
 /* ************************************************************* */
@@ -332,34 +386,56 @@ bannerstrmangle(char *buf, char *fromstr, char *tostr)
 }
 
 void
+freebanner(struct dg_banner *ban)
+{
+    unsigned int l;
+    if (!ban) return;
+    l = ban->len;
+
+    while (l > 0) {
+	l--;
+	free(ban->lines[l]);
+    }
+    free(ban->lines);
+    ban->len = 0;
+    ban->lines = NULL;
+}
+
+void
+banner_addline(struct dg_banner *ban, char *line)
+{
+    size_t len = strlen(line);
+    if (!ban) return;
+    ban->len++;
+    ban->lines = realloc (ban->lines, sizeof (char *) * ban->len);
+    if (len >= 80) {
+	len = 80;
+	ban->lines[ban->len - 1] = malloc(len);
+	strncpy(ban->lines[ban->len - 1], line, len);
+	ban->lines[ban->len - 1][len-1] = '\0';
+    } else
+	ban->lines[ban->len - 1] = strdup(line);
+}
+
+void
 loadbanner (char *fname, struct dg_banner *ban)
 {
   FILE *bannerfile;
   char buf[80];
+  if (ban->len > 23) return;
 
   memset (buf, 0, 80);
-
-  if (ban->lines) return;
 
   bannerfile = fopen (fname, "r");
 
   if (!bannerfile)
     {
-#define NOTE_NO_DGL_BANNER "### NOTE: administrator has not installed a %s file"
-      size_t len;
-      ban->len = 2;
-      ban->lines = malloc (sizeof (char *));
-      ban->lines[0] =
-        strdup ("### dgamelaunch " PACKAGE_VERSION
-                " - network console game launcher");
-      len = strlen(fname) + ARRAY_SIZE(NOTE_NO_DGL_BANNER);
-      ban->lines[1] = malloc(len);
-      snprintf(ban->lines[1], len, NOTE_NO_DGL_BANNER, fname);
-#undef NOTE_NO_DGL_BANNER
-      return;
+	if (ban->len == 0)
+	    banner_addline(ban, "### dgamelaunch " PACKAGE_VERSION " - network console game launcher");
+	snprintf(buf, 80, "### NOTE: administrator has not installed a %s file", fname);
+	banner_addline(ban, buf);
+	return;
     }
-
-  ban->len = 0;
 
   while (fgets (buf, 80, bannerfile) != NULL)
     {
@@ -371,22 +447,31 @@ loadbanner (char *fname, struct dg_banner *ban)
       slen = strlen(buf);
       if ((slen > 0) && (buf[slen-1] == '\n')) buf[slen-1] = '\0';
 
-      ban->len++;
-      ban->lines = realloc (ban->lines, sizeof (char *) * ban->len);
-
       strncpy(bufnew, buf, 80);
-      strncpy(bufnew, bannerstrmangle(bufnew, "$VERSION", PACKAGE_STRING), 80);
-      strncpy(bufnew, bannerstrmangle(bufnew, "$SERVERID", globalconfig.server_id ? globalconfig.server_id : ""), 80);
-      if (me && loggedin) {
-	  strncpy(bufnew, bannerstrmangle(bufnew, "$USERNAME", me->username), 80);
+      if (strstr(bufnew, "$INCLUDE(")) {
+	  char *fn = bufnew + 9;
+	  char *fn_end = strchr(fn, ')');
+	  if (fn_end) {
+	      *fn_end = '\0';
+	      if (strcmp(fname, fn)) {
+		  banner_addline(ban, fn);
+		  loadbanner(fn, ban);
+	      }
+	  }
       } else {
-	  strncpy(bufnew, bannerstrmangle(bufnew, "$USERNAME", "[Anonymous]"), 80);
+	  strncpy(bufnew, bannerstrmangle(bufnew, "$VERSION", PACKAGE_STRING), 80);
+	  strncpy(bufnew, bannerstrmangle(bufnew, "$SERVERID", globalconfig.server_id ? globalconfig.server_id : ""), 80);
+	  if (me && loggedin) {
+	      strncpy(bufnew, bannerstrmangle(bufnew, "$USERNAME", me->username), 80);
+	  } else {
+	      strncpy(bufnew, bannerstrmangle(bufnew, "$USERNAME", "[Anonymous]"), 80);
+	  }
+	  banner_addline(ban, bufnew);
       }
-      ban->lines[ban->len - 1] = strdup(bufnew);
 
       memset (buf, 0, 80);
 
-      if (ban->len == 24)
+      if (ban->len >= 24)
 	  break;
   }
 
@@ -408,17 +493,204 @@ drawbanner (struct dg_banner *ban, unsigned int start_line, unsigned int howmany
 }
 
 void
+shm_sem_wait(struct dg_shm *shm_dg_data)
+{
+#ifdef USE_SHMEM
+    if (sem_wait(&(shm_dg_data->dg_sem)) == -1) {
+	debug_write("sem_wait");
+	graceful_exit(77);
+    }
+#endif
+}
+
+void
+shm_sem_post(struct dg_shm *shm_dg_data)
+{
+#ifdef USE_SHMEM
+    if (sem_post(&(shm_dg_data->dg_sem)) == -1) {
+	debug_write("sem_post");
+	graceful_exit(78);
+    }
+#endif
+}
+
+void
+shm_update(struct dg_shm *shm_dg_data, struct dg_game **games, int len)
+{
+#ifdef USE_SHMEM
+    int di, i;
+    struct dg_shm_game *shm_dg_game = (struct dg_shm_game *)(shm_dg_data + sizeof(struct dg_shm));
+
+    shm_sem_wait(shm_dg_data);
+
+    for (di = 0; di < shm_dg_data->max_n_games; di++)
+	if (shm_dg_game[di].in_use) {
+	    int delgame = 1;
+	    for (i = 0; i < len; i++) {
+		if (!strcmp(games[i]->ttyrec_fn, shm_dg_game[di].ttyrec_fn)) {
+		    delgame = 0;
+		    games[i]->is_in_shm = 1;
+		    games[i]->shm_idx = di;
+		    games[i]->nwatchers = shm_dg_game[di].nwatchers;
+		    break;
+		}
+	    }
+	    if (delgame) {
+		shm_dg_game[di].in_use = 0;
+		if (shm_dg_data->cur_n_games > 0) shm_dg_data->cur_n_games--;
+	    }
+	}
+
+    if (shm_dg_data->cur_n_games < shm_dg_data->max_n_games) {
+	for (i = 0; i < len; i++)
+	    if (!games[i]->is_in_shm) {
+		for (di = 0; di < shm_dg_data->max_n_games; di++)
+		    if (!shm_dg_game[di].in_use) {
+			shm_dg_game[di].in_use = 1;
+			shm_dg_game[di].nwatchers = 0;
+			games[i]->nwatchers = 0;
+			games[i]->is_in_shm = 1;
+			games[i]->shm_idx = di;
+			shm_dg_data->cur_n_games++;
+			strncpy(shm_dg_game[di].ttyrec_fn, games[i]->ttyrec_fn, 150);
+			break;
+		    }
+	    }
+    }
+
+    shm_sem_post(shm_dg_data);
+#endif
+}
+
+void
+shm_mk_keys(key_t *shm_key, key_t *shm_sem_key)
+{
+#ifdef USE_SHMEM
+    if ((*shm_key = ftok("dgamelaunch", 'R')) == -1) {
+	debug_write("ftok shm_key");
+	graceful_exit(71);
+    }
+    if ((*shm_sem_key = ftok("dgamelaunch", 'S')) == -1) {
+	debug_write("ftok shm_sem_key");
+	graceful_exit(72);
+    }
+#endif
+}
+
+#ifdef USE_SHMEM
+int
+shm_free()
+{
+    key_t shm, sem;
+    int   shm_id;
+    int shm_size = sizeof(struct dg_shm) + shm_n_games * sizeof(struct dg_shm_game);
+    shm_mk_keys(&shm, &sem);
+    if ((shm_id = shmget(shm, shm_size, 0644)) != -1) {
+	shmctl(shm_id, IPC_RMID, NULL);
+	return 0;
+    }
+    return 1;
+}
+#endif
+
+void
+shm_init(struct dg_shm **shm_dg_data, struct dg_shm_game **shm_dg_game)
+{
+#ifdef USE_SHMEM
+  key_t shm_key;
+  key_t shm_sem_key;
+  int   shm_id;
+  int   shm_size;
+  void *shm_data = NULL;
+  int   shm_data_existed = 0;
+
+  shm_mk_keys(&shm_key, &shm_sem_key);
+
+  /* max. shm_n_games simultaneous games recorded in the shared memory */
+  shm_size = sizeof(struct dg_shm) + shm_n_games * sizeof(struct dg_shm_game);
+
+  /* connect to (and possibly create) the segment */
+  if ((shm_id = shmget(shm_key, shm_size, 0644 | IPC_CREAT | IPC_EXCL)) == -1) {
+      /* creation failed, so it already exists. attach to it */
+      shm_data_existed = 1;
+      if ((shm_id = shmget(shm_key, shm_size, 0644)) == -1) {
+	  debug_write("shmget");
+	  graceful_exit(73);
+      }
+  }
+
+  /* attach to the segment to get a pointer to it: */
+  shm_data = shmat(shm_id, (void *)0, 0);
+  if (shm_data == (char *)(-1)) {
+      debug_write("shmat");
+      graceful_exit(74);
+  }
+  if (!shm_data) {
+      debug_write("shm_data == null");
+      graceful_exit(75);
+  }
+
+  (*shm_dg_data) = (struct dg_shm *)shm_data;
+  (*shm_dg_game) = (struct dg_shm_game *)((*shm_dg_data) + sizeof(struct dg_shm));
+
+  if (!shm_data_existed && shm_data) {
+      memset(*shm_dg_game, 0, shm_n_games*sizeof(struct dg_shm_game));
+      (*shm_dg_data)->max_n_games = shm_n_games;
+      (*shm_dg_data)->cur_n_games = 0;
+      if (sem_init(&((*shm_dg_data)->dg_sem), 1,1) == -1) {
+	  debug_write("sem_init");
+	  graceful_exit(76);
+      }
+  }
+#endif /* USE_SHMEM */
+}
+
+#ifdef USE_SHMEM
+void
+shm_dump()
+{
+    struct dg_shm *shm_dg_data = NULL;
+    struct dg_shm_game *shm_dg_game = NULL;
+    int di, unused = -1;
+    shm_init(&shm_dg_data, &shm_dg_game);
+    shm_sem_wait(shm_dg_data);
+    for (di = 0; di < shm_dg_data->max_n_games; di++) {
+	if (shm_dg_game[di].in_use) {
+	    if (unused != -1) {
+		if (unused != di-1)
+		    fprintf(stderr, "%i-%i:\tunused\n", unused, di-1);
+		else
+		    fprintf(stderr, "%i:\tunused\n", unused);
+		unused = -1;
+	    }
+	    fprintf(stderr, "%i:\t\"%s\"\twatchers:%li\n", di, shm_dg_game[di].ttyrec_fn, shm_dg_game[di].nwatchers);
+	} else {
+	    if (unused == -1) unused = di;
+	}
+    }
+    if (unused != -1) {
+	if (unused != di-1)
+	    fprintf(stderr, "%i-%i:\tunused\n", unused, di-1);
+	else
+	    fprintf(stderr, "%i:\tunused\n", unused);
+	unused = -1;
+    }
+    shm_sem_post(shm_dg_data);
+    shmdt(shm_dg_data);
+}
+#endif
+
+void
 inprogressmenu (int gameid)
 {
     const char *selectorchars = "abcdefghijklmnoprstuvwxyzABCDEFGHIJKLMNOPRSTUVWXYZ";
   int i, menuchoice, len = 20, offset = 0;
   static dg_sortmode sortmode = NUM_SORTMODES;
-  time_t ctime;
   struct dg_game **games = NULL;
-  char ttyrecname[130], gametype[10];
-  int *is_nhext;
+  char ttyrecname[130], gametype[10], idletime[10];
   sigset_t oldmask, toblock;
   int idx = -1;
+  int shm_idx = -1;
   int max_height = -1;
   int selected = -1;
 
@@ -437,18 +709,40 @@ inprogressmenu (int gameid)
 
   int require_enter = 0; /* TODO: make configurable */
 
+  int di;
+
+  time_t ctime;
+
+  struct dg_watchcols {
+      int dat;
+      int sortmode;
+      int x;
+      char *colname;
+      char *fmt;
+  } watchcols[] = {
+      {0, SORTMODE_NONE,        1, "", "%s)"},
+      {1, SORTMODE_USERNAME,    4, "Username", "%-15s"},
+      {2, SORTMODE_GAMENUM,    21, "Game", "%-5s"},
+      {3, SORTMODE_WINDOWSIZE, 28, " Size", "%s"},
+      {4, SORTMODE_STARTTIME,  37, "Start date & time", "%s"},
+      {5, SORTMODE_IDLETIME,   58, "Idle time", "%-10s"},
+#ifdef USE_SHMEM
+      {6, SORTMODE_WATCHERS,   70, "Watchers", "%s"},
+#endif
+  };
+
+  struct dg_shm *shm_dg_data = NULL;
+  struct dg_shm_game *shm_dg_game = NULL;
+
   if (sortmode == NUM_SORTMODES)
       sortmode = globalconfig.sortmode;
 
   abs_max_height = strlen(selectorchars);
-  is_nhext = (int *)calloc(abs_max_height+1, sizeof(int));
 
-  if (!is_nhext) {
-      debug_write("could not calloc is_nhext");
-      graceful_exit(70);
-  }
+  shm_init(&shm_dg_data, &shm_dg_game);
 
   games = populate_games (gameid, &len, NULL); /* FIXME: should be 'me' instead of 'NULL' */
+  shm_update(shm_dg_data, games, len);
   games = sort_games (games, len, sortmode);
 
   while (1)
@@ -456,7 +750,6 @@ inprogressmenu (int gameid)
 	term_resize_check();
 	max_height = dgl_local_LINES - (top_banner_hei + btm_banner_hei) - 1;
 	if (max_height < 2) {
-	    free(is_nhext);
 	    free_populated_games(games, len);
 	    return;
 	}
@@ -464,36 +757,28 @@ inprogressmenu (int gameid)
 
       if (len == 0)
         offset = 0;
-      else
-        {
-	  while (offset >= len && offset >= max_height)
-	    offset -= max_height;
-
-	  while ((offset > 0) && (offset + max_height > len))
-	      offset--;
-	}
 
       erase ();
       drawbanner (&banner, 1, 1);
 
       if (len > 0) {
+	  while (offset >= len) { offset -= max_height; }
+	  if (offset < 0) offset = 0;
 	  mvaddstr (3, 1, "The following games are in progress:");
 
-#define dgl_sortprintw(mode, x, str)                 \
-	  if (sortmode == mode) attron(title_attr);  \
-	  mvprintw(top_banner_hei,x,str);            \
-	  if (sortmode == mode) attroff(title_attr);
-
-	  mvprintw(top_banner_hei,1," ");
-
-	  dgl_sortprintw(SORTMODE_USERNAME,    4, "Username")
-	  dgl_sortprintw(SORTMODE_GAMENUM,    26, "Game")
-	  dgl_sortprintw(SORTMODE_WINDOWSIZE, 40, "Size")
-	  dgl_sortprintw(SORTMODE_STARTTIME,  46, "Start date & time")
-	  dgl_sortprintw(SORTMODE_IDLETIME,   67, "Idle time")
-
-#undef dgl_sortprintw
+	  for (di = 0; di < ARRAY_SIZE(watchcols); di++) {
+	      char *col = watchcols[di].colname;
+	      int x = watchcols[di].x;
+	      while (*col == ' ') { x++; col++; }
+	      if (sortmode == watchcols[di].sortmode) attron(title_attr);
+	      mvprintw(top_banner_hei, x, col);
+	      if (sortmode == watchcols[di].sortmode) attroff(title_attr);
+	  }
       }
+
+      shm_sem_wait(shm_dg_data);
+
+      (void) time(&ctime);
 
       for (i = 0; i < max_height; i++)
         {
@@ -502,32 +787,68 @@ inprogressmenu (int gameid)
 
 	  if (i + offset == selected) attron(selected_attr);
 
-	  is_nhext[i] = !strcmp (games[i + offset]->ttyrec_fn + strlen (games[i + offset]->ttyrec_fn) - 6, ".nhext");
-
-	  if (is_nhext[i])
-	    strcpy (gametype, "  NhExt");
-	  else
-	    snprintf (gametype, sizeof gametype, "%3dx%2d",
+	  snprintf (gametype, sizeof gametype, "%3dx%3d",
 		games[i + offset]->ws_col, games[i + offset]->ws_row);
 
-          mvprintw (top_banner_hei + 1 + i, 1, "%c) %-20s  %-9s  %7s  %s %s  %ldm %lds",
-                    selectorchars[i], games[i + offset]->name, myconfig[games[i + offset]->gamenum]->shortname, gametype,
-                    games[i + offset]->date, games[i + offset]->time,
-                    (time (&ctime) - games[i + offset]->idle_time) / 60,
-                    (time (&ctime) - games[i + offset]->idle_time) % 60);
+	  {
+	      long secs, mins, hours;
+
+	      secs = (ctime - games[i + offset]->idle_time);
+	      hours = (secs / 3600);
+	      secs -= (hours * 3600);
+	      mins = (secs / 60) % 60;
+	      secs -= (mins*60);
+	      if (hours)
+		  snprintf(idletime, 10, "%ldh %ldm", hours, mins);
+	      else if (mins)
+		  snprintf(idletime, 10, "%ldm %lds", mins, secs);
+	      else if (secs > 4)
+		  snprintf(idletime, 10, "%lds", secs);
+	      else
+		  snprintf(idletime, 10, " ");
+	  }
+
+	  for (di = 0; di < ARRAY_SIZE(watchcols); di++) {
+	      char tmpbuf[80];
+	      int hilite = 0;
+	      switch (watchcols[di].dat) {
+	      default: break;
+	      case 0: tmpbuf[0] = selectorchars[i]; tmpbuf[1] = '\0'; break;
+	      case 1: snprintf(tmpbuf, 80, "%s", games[i + offset]->name); break;
+	      case 2: snprintf(tmpbuf, 80, "%s", myconfig[games[i + offset]->gamenum]->shortname); break;
+	      case 3:
+		  snprintf(tmpbuf, 80, "%s", gametype);
+		  if ((games[i+offset]->ws_col > COLS || games[i+offset]->ws_row > LINES))
+		      hilite = CLR_RED;
+		  break;
+	      case 4: snprintf(tmpbuf, 80, "%s %s", games[i + offset]->date, games[i + offset]->time); break;
+	      case 5: snprintf(tmpbuf, 80, "%s", idletime); break;
+#ifdef USE_SHMEM
+	      case 6: snprintf(tmpbuf, 80, "%li", (games[i+offset]->is_in_shm ? shm_dg_game[games[i+offset]->shm_idx].nwatchers : -1)); break;
+#endif
+	      }
+	      tmpbuf[79] = '\0';
+	      if (hilite) attron(hilite);
+	      mvprintw(top_banner_hei + 1 + i, watchcols[di].x, watchcols[di].fmt, tmpbuf);
+	      if (hilite) {
+		  attron(CLR_NORMAL);
+		  hilite = 0;
+	      }
+	  }
 
 	  if (i + offset == selected) attroff(selected_attr);
 
         }
 
+      shm_sem_post(shm_dg_data);
+
       btm = dgl_local_LINES-btm_banner_hei-top_banner_hei;
-      if (btm > i) btm = i+1;
+      if (len <= max_height)
+	  btm = i+1;
+
       if (len > 0) {
-	  if (max_height+offset < len)
-	      mvprintw ((btm+top_banner_hei), 1, "(%d-%d of %d)", offset + 1, offset + i, len);
-	  else
-	      mvprintw ((btm+top_banner_hei), 4, "(end)");
-	  mvaddstr ((btm+2+top_banner_hei), 1, "Choose game to watch ('?' for help) => ");
+	  mvprintw ((btm+top_banner_hei), 1, "(%d-%d of %d)", offset + 1, offset + i, len);
+	  mvaddstr ((btm+2+top_banner_hei), 1, "Watch which game? ('?' for help) => ");
       } else {
 	  mvprintw(top_banner_hei, 1,"Sorry, no games available for viewing.");
 	  mvaddstr((2+top_banner_hei), 1, "Press 'q' to return to the main menu.");
@@ -537,9 +858,30 @@ inprogressmenu (int gameid)
 
       switch ((menuchoice = dgl_getch ()))
         {
+	case KEY_DOWN:
+	    selected++;
+	    if (selected >= len) selected = 0;
+	    while (selected < offset) offset -= max_height;
+	    while (selected >= offset+max_height) offset += max_height;
+	    break;
+	case KEY_UP:
+	    if (selected != -1) {
+		if (selected == 0) selected = len;
+		selected--;
+	    } else selected = len-1;
+	    while (selected < offset) offset -= max_height;
+	    while (selected >= offset+max_height) offset += max_height;
+	    break;
 	case '*':
 	    if (len > 0) {
-		idx = random() % len;
+		int cnt = 20;
+		(void) time(&ctime);
+		do {
+		    idx = random() % len;
+		} while ((--cnt > 0) ||
+			 !((games[idx]->ws_col <= COLS) &&
+			  (games[idx]->ws_row <= LINES) &&
+			  ((ctime - games[idx]->idle_time) < 15)));
 		selected = idx;
 		goto watchgame;
 	    }
@@ -568,7 +910,6 @@ inprogressmenu (int gameid)
 		   if (nmatches > 1)
 		       match = firstmatch;
                    if (match > -1) {
-		       if (!strcmp(games[match]->ttyrec_fn + strlen (games[match]->ttyrec_fn) - 6, ".nhext")) break;
 		       idx = match;
 		       selected = idx;
 		       goto watchgame;
@@ -576,14 +917,11 @@ inprogressmenu (int gameid)
                }
            }
            break;
+	case KEY_NPAGE:
         case '>':
-	    if ((offset + max_height) >= len) {
-		if (max_height < len) offset = (len - max_height);
-		else offset = 0;
-	    } else
-            offset += max_height;
+	    if ((offset + max_height) < len) offset += max_height;
           break;
-
+	case KEY_PPAGE:
         case '<':
           if ((offset - max_height) < 0)
 	      offset = 0;
@@ -593,14 +931,16 @@ inprogressmenu (int gameid)
 
 	case ERR:
 	case 'q': case 'Q':
-	    if (is_nhext) free(is_nhext);
 	    free_populated_games(games, len);
+#ifdef USE_SHMEM
+	    shmdt(shm_dg_data);
+#endif
           return;
-
+	case KEY_RIGHT:
 	case '.':
 	    if (sortmode < (NUM_SORTMODES-1)) sortmode++; else sortmode = SORTMODE_USERNAME;
 	    break;
-
+	case KEY_LEFT:
 	case ',':
 	    if (sortmode > SORTMODE_USERNAME) sortmode--; else sortmode = (NUM_SORTMODES-1);
 	    break;
@@ -627,9 +967,6 @@ inprogressmenu (int gameid)
 		    break;
 		}
 
-		if (is_nhext[sidx]) /* Cannot watch NhExt game */
-		    break;
-
 	      idx = sidx + offset;
 	      if (require_enter) {
 		  if (selected == idx) selected = -1;
@@ -646,7 +983,22 @@ watchgame:
               clear ();
               refresh ();
               endwin ();
-
+#ifdef USE_SHMEM
+	      signals_block();
+	      if (games[idx]->is_in_shm) {
+		  shm_idx = games[idx]->shm_idx;
+		  shm_sem_wait(shm_dg_data);
+		  if (shm_dg_game[shm_idx].in_use &&
+		      !strcmp(shm_dg_game[shm_idx].ttyrec_fn, games[idx]->ttyrec_fn)) {
+		      shm_dg_game[shm_idx].nwatchers++;
+		      games[idx]->nwatchers++;
+		  }
+		  hup_shm_idx = shm_idx;
+		  hup_shm_ttyrec_fn = strdup(games[idx]->ttyrec_fn);
+		  shm_sem_post(shm_dg_data);
+	      }
+	      signals_release();
+#endif
 	      resizey = games[idx]->ws_row;
 	      resizex = games[idx]->ws_col;
 	      if (loggedin)
@@ -658,13 +1010,31 @@ watchgame:
 		  setproctitle("%s", me->username);
 	      else
 		  setproctitle("<Anonymous>");
+#ifdef USE_SHMEM
+	      signals_block();
+	      if (games[idx]->is_in_shm) {
+		  hup_shm_idx = -1;
+		  free(hup_shm_ttyrec_fn);
+		  shm_sem_wait(shm_dg_data);
+		  if (shm_dg_game[shm_idx].in_use &&
+		      !strcmp(shm_dg_game[shm_idx].ttyrec_fn, games[idx]->ttyrec_fn) &&
+		      (shm_dg_game[shm_idx].nwatchers > 0)) {
+		      shm_dg_game[shm_idx].nwatchers--;
+		      games[idx]->nwatchers--;
+		  }
+		  shm_sem_post(shm_dg_data);
+	      }
+	      signals_release();
+#endif
               initcurses ();
+	      redrawwin(stdscr);
             }
         }
 
       if (selected >= 0 && selected < len)
 	  selectedgame = strdup(games[selected]->name);
       games = populate_games (gameid, &len, NULL); /* FIXME: should be 'me' instead of 'NULL' */
+      shm_update(shm_dg_data, games, len);
       games = sort_games (games, len, sortmode);
       if (selectedgame) {
 	  selected = -1;
@@ -677,8 +1047,10 @@ watchgame:
 	  selectedgame = NULL;
       }
     }
-  if (is_nhext) free(is_nhext);
   free_populated_games(games, len);
+#ifdef USE_SHMEM
+  shmdt(shm_dg_data);
+#endif
 }
 
 /* ************************************************************* */
@@ -730,6 +1102,13 @@ change_email ()
   char buf[81];
 
   clear();
+
+  if (me->flags & DGLACCT_EMAIL_LOCK) {
+      drawbanner(&banner, 1, 1);
+      mvprintw(5, 1, "Sorry, you cannot change the email.--More--");
+      dgl_getch();
+      return;
+  }
 
   for (;;)
   {
@@ -786,6 +1165,14 @@ changepw (int dowrite)
   if (!me) {
       debug_write("no 'me' in changepw");
     graceful_exit (122);        /* Die. */
+  }
+
+  if (me->flags & DGLACCT_PASSWD_LOCK) {
+      clear();
+      drawbanner(&banner, 1, 1);
+      mvprintw(5, 1, "Sorry, you cannot change the password.--More--");
+      dgl_getch();
+      return 0;
   }
 
   while (error)
@@ -1036,12 +1423,21 @@ freefile ()
 void
 initcurses ()
 {
+  printf("\033[2J");
   initscr ();
   cbreak ();
   noecho ();
   nonl ();
   intrflush (stdscr, FALSE);
   keypad (stdscr, TRUE);
+#ifdef USE_NCURSES_COLOR
+  start_color();
+  use_default_colors();
+  init_pair(1, -1, -1);
+  init_pair(2, COLOR_RED, -1);
+#endif
+  clear();
+  refresh();
 }
 
 /* ************************************************************* */
@@ -1053,7 +1449,7 @@ autologin (char* user, char *pass)
   tmp = userexist(user, 0);
   if (tmp) {
       me = cpy_me(tmp);
-      if (passwordgood(pass)) {
+      if (passwordgood(pass) && !(me->flags & DGLACCT_LOGIN_LOCK)) {
 	  loggedin = 1;
 	  setproctitle ("%s", me->username);
 	  dgl_exec_cmdqueue(globalconfig.cmdqueue[DGLTIME_LOGIN], 0, me);
@@ -1121,6 +1517,13 @@ loginprompt (int from_ttyplay)
 
   if (passwordgood (pw_buf))
     {
+	if (me->flags & DGLACCT_LOGIN_LOCK) {
+	    clear ();
+	    mvprintw(5, 1, "Sorry, that account has been banned.--More--");
+	    dgl_getch();
+	    return;
+	}
+
       loggedin = 1;
       if (from_ttyplay)
 	  setproctitle("%s [watching %s]", me->username, chosen_name);
@@ -1284,6 +1687,7 @@ newuser ()
 
   me->email = strdup (buf);
   me->env = calloc (1, 1);
+  me->flags = 0;
 
   loggedin = 1;
 
@@ -1592,44 +1996,6 @@ write_canned_rcfile (int game, char *target)
 }
 
 
-void
-editoptions (int game)
-{
-  FILE *rcfile;
-  char *myargv[3];
-  pid_t editor;
-
-  rcfile = fopen (dgl_format_str(game, me, myconfig[game]->rc_fmt, NULL), "r");
-  if (!rcfile)
-      write_canned_rcfile (game, dgl_format_str(game, me, myconfig[game]->rc_fmt, NULL));
-
-  /* use whatever editor_main to edit */
-
-  myargv[0] = "";
-  myargv[1] = dgl_format_str(game, me, myconfig[game]->rc_fmt, NULL);
-  myargv[2] = 0;
-
-  endwin ();
-
-  editor = fork();
-
-  if (editor == -1)
-  {
-    perror("fork");
-    debug_write("edit fork failed");
-    graceful_exit(114);
-  }
-  else if (editor == 0)
-  {
-    editor_main (2, myargv);
-    exit(0);
-  }
-  else
-    waitpid(editor, NULL, 0);
-
-  refresh ();
-  check_retard(1);
-}
 
 /* ************************************************************* */
 
@@ -1641,30 +2007,24 @@ writefile (int requirenew)
   int i = 0;
   int my_done = 0;
   struct flock fl = { 0 };
-  sigset_t oldmask, toblock;
 
   fl.l_type = F_WRLCK;
   fl.l_whence = SEEK_SET;
   fl.l_start = 0;
   fl.l_len = 0;
 
-  sigemptyset(&toblock);
-  sigaddset(&toblock, SIGHUP);
-  sigaddset(&toblock, SIGINT);
-  sigaddset(&toblock, SIGQUIT);
-  sigaddset(&toblock, SIGTERM);
-  sigprocmask(SIG_BLOCK, &toblock, &oldmask);
+  signals_block();
 
   fpl = fopen (globalconfig.lockfile, "r+");
   if (!fpl)
     {
-      sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	signals_release();
       debug_write("writefile locking failed");
       graceful_exit (115);
     }
   if (fcntl (fileno (fpl), F_SETLK, &fl))
     {
-      sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	signals_release();
       debug_write("writefile fcntl failed");
       graceful_exit (107);
     }
@@ -1677,7 +2037,7 @@ writefile (int requirenew)
   fp = fopen (globalconfig.passwd, "w");
   if (!fp)
     {
-      sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	signals_release();
       debug_write("passwd file fopen failed");
       graceful_exit (104);
     }
@@ -1692,7 +2052,7 @@ writefile (int requirenew)
                * as someone else. just die. */
 	      fclose(fp);
 	      fclose(fpl);
-              sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	      signals_release();
 	      debug_write("two users registering at the same time");
               graceful_exit (111);
             }
@@ -1715,7 +2075,7 @@ writefile (int requirenew)
 	{
           fclose(fp);
 	  fclose(fpl);
-          sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	  signals_release();
 	  debug_write("too many users in passwd db already");
           graceful_exit (116);
 	}
@@ -1724,7 +2084,7 @@ writefile (int requirenew)
   fclose (fp);
   fclose (fpl);
 
-  sigprocmask(SIG_SETMASK, &oldmask, NULL);
+  signals_release();
 }
 #else
 void
@@ -1764,13 +2124,6 @@ writefile (int requirenew)
 #endif
 
 /* ************************************************************* */
-
-/* ************************************************************* */
-
-/* ************************************************************* */
-/* ************************************************************* */
-/* ************************************************************* */
-
 
 int
 purge_stale_locks (int game)
@@ -1932,7 +2285,10 @@ runmenuloop(struct dg_menu *menu)
 	    mvprintw(menu->cursor_y, menu->cursor_x, "");
 	refresh();
 	userchoice = dgl_getch();
-	if (userchoice == ERR) return 1;
+	if (userchoice == ERR) {
+	    freebanner(&ban);
+	    return 1;
+	}
 	tmpopt = menu->options;
 	while (tmpopt) {
 	    if (strchr(tmpopt->keys, userchoice)) {
@@ -1945,75 +2301,17 @@ runmenuloop(struct dg_menu *menu)
 	}
 
 	if (return_from_submenu) {
+	    freebanner(&ban);
 	    return_from_submenu = 0;
 	    return 0;
 	}
 
 	if (check_retard(0)) {
+	    freebanner(&ban);
 	    debug_write("retard");
 	    graceful_exit(119);
 	}
     }
-}
-
-
-int
-authenticate ()
-{
-  int i, len, me_index;
-  char user_buf[DGL_PLAYERNAMELEN+1], pw_buf[DGL_PASSWDLEN+1];
-  struct dg_game **games = NULL;
-
-  /* We use simple password authentication, rather than challenge/response. */
-  printf ("\n");
-  fflush(stdout);
-
-  fgets (user_buf, sizeof(user_buf), stdin);
-  len = strlen (user_buf);
-  if (user_buf[len - 1] == '\n')
-    user_buf[--len] = '\0';
-  else
-    {
-	fprintf (stderr, "Username too long (max %i chars).\n", DGL_PLAYERNAMELEN);
-      return 1;
-    }
-
-  fgets (pw_buf, sizeof(pw_buf), stdin);
-  len = strlen (pw_buf);
-  if (pw_buf[len - 1] == '\n')
-    pw_buf[--len] = '\0';
-  else
-    {
-	fprintf (stderr, "Password too long (max %i chars).\n", DGL_PASSWDLEN);
-      return 1;
-    }
-
-  {
-      struct dg_user *tmpme;
-      if ((tmpme = userexist(user_buf, 0))) {
-	  me = cpy_me(tmpme);
-      if (passwordgood (pw_buf))
-        {
-	    games = populate_games (-1, &len, me);
-	  for (i = 0; i < len; i++)
-	    if (!strcmp (games[i]->name, user_buf))
-	      {
-		fprintf (stderr, "Game already in progress.\n");
-		free_populated_games(games, len);
-		return 1;
-	      }
-	  win.ws_row = win.ws_col = 0;
-	  gen_inprogress_lock (0, getppid (), gen_nhext_filename ());
-	  free_populated_games(games, len);
-	  return 0;
-	}
-      }
-  }
-
-  sleep (2);
-  fprintf (stderr, "Login failed.\n");
-  free_populated_games(games, len);
-  return 1;
 }
 
 int
@@ -2023,7 +2321,6 @@ main (int argc, char** argv)
     char atrcfilename[81], *p, *auth = NULL;
   unsigned int len;
   int c, i;
-  int nhext = 0, nhauth = 0;
   int userchoice;
   char *tmp;
   char *wall_email_str = NULL;
@@ -2063,18 +2360,12 @@ main (int argc, char** argv)
 
   __progname = basename(strdup(argv[0]));
 
-  while ((c = getopt(argc, argv, "qh:pf:aeW:")) != -1)
+  while ((c = getopt(argc, argv, "qh:pf:aeW:SD")) != -1)
   {
     switch (c)
     {
       case 'q':
 	silent = 1; break;
-
-      case 'a':
-	nhauth = 1; break;
-
-      case 'e':
-	nhext = 1; break;
 
       case 'f':
 	if (config)
@@ -2089,6 +2380,28 @@ main (int argc, char** argv)
 
     case 'W':
 	wall_email_str = strdup(optarg);
+	break;
+
+    case 'S': /* Free the shared memory block */
+#ifdef USE_SHMEM
+	if (shm_free()) {
+	    if (!silent) fprintf(stderr, "nonexistent shmem block.\n");
+	} else {
+	    if (!silent) fprintf(stderr, "shmem block freed.\n");
+	}
+#else
+	if (!silent) fprintf(stderr, "warning: dgamelaunch was compiled without shmem.\n");
+#endif
+	graceful_exit(0);
+	break;
+
+    case 'D': /* dump the shared memory block data */
+#ifdef USE_SHMEM
+	shm_dump();
+#else
+	if (!silent) fprintf(stderr, "warning: dgamelaunch was compiled without shmem.\n");
+#endif
+	graceful_exit(0);
 	break;
 
       default:
@@ -2109,6 +2422,10 @@ main (int argc, char** argv)
 
   /* signal handlers */
   signal (SIGHUP, catch_sighup);
+  signal (SIGINT, catch_sighup);
+  signal (SIGQUIT, catch_sighup);
+  signal (SIGTERM, catch_sighup);
+
   signal(SIGWINCH, sigwinch_func);
 
   (void) tcgetattr (0, &tt);
@@ -2122,8 +2439,7 @@ main (int argc, char** argv)
     }
 
   /* get master tty just before chroot (lives in /dev) */
-  if (!nhext && !nhauth)
-    ttyrec_getpty ();
+  ttyrec_getpty ();
 
 #ifdef USE_RLIMIT
 #ifdef USE_RLIMIT_CORE
@@ -2191,33 +2507,16 @@ main (int argc, char** argv)
       graceful_exit(0);
   }
 
-
+  banner.len = 0;
+  banner.lines = NULL;
   loadbanner(globalconfig.banner, &banner);
 
   dgl_exec_cmdqueue(globalconfig.cmdqueue[DGLTIME_DGLSTART], 0, NULL);
-
-  if (nhext)
-    {
-      char *myargv[3];
-
-      myargv[0] = myconfig[0]->game_path;
-      myargv[1] = "--proxy";
-      myargv[2] = 0;
-
-      execvp (myconfig[0]->game_path, myargv);
-      perror (myconfig[0]->game_path);
-      graceful_exit (1);
-    }
 
   /* simple login routine, uses ncurses */
   if (readfile (0)) {
       debug_write("log in fail");
     graceful_exit (110);
-  }
-
-  if (nhauth) {
-      debug_write("nhauth");
-    graceful_exit (authenticate ());
   }
 
   if (auth)
@@ -2242,16 +2541,22 @@ main (int argc, char** argv)
   initcurses ();
   term_resize_check();
 
+  idle_alarm_set_enabled(1);
+
   while (1) {
-      if (runmenuloop(dgl_find_menu(loggedin ? "mainmenu_user" : "mainmenu_anon")))
+      if (runmenuloop(dgl_find_menu(get_mainmenu_name())))
 	  break;
   }
+
+  idle_alarm_set_enabled(0);
 
   /* NOW we can safely kill this */
   freefile ();
 
   if (me)
     free (me);
+
+  freebanner(&banner);
 
   graceful_exit (1);
 

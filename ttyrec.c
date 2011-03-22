@@ -83,7 +83,45 @@ int master;
 
 struct termios tt;
 struct winsize win;
-int uflg;
+
+void
+ttyrec_id(int game, char *username, char *ttyrec_filename)
+{
+    int i;
+    time_t tstamp;
+    Header h;
+    char *buf = (char *)malloc(1024);
+    char tmpbuf[256];
+    if (!buf) return;
+
+    tstamp = time(NULL);
+
+#define dCLRSCR "\033[2J"
+#define dCRLF   "\r\n"
+    snprintf(buf, 1024,
+            dCLRSCR "\033[1;1H" dCRLF
+            "Player: %s" dCRLF
+            "Game: %s" dCRLF
+            "Server: %s" dCRLF
+            "Filename: %s" dCRLF
+            "Time: (%lu) %s" dCRLF
+            dCLRSCR,
+            username,
+            myconfig[game]->game_name,
+            globalconfig.server_id,
+            ttyrec_filename,
+            tstamp, ctime(&tstamp)
+            );
+#undef dCLRSCR
+#undef dCRLF
+    h.len = strlen(buf);
+    gettimeofday (&h.tv, NULL);
+
+    (void) write_header(fscript, &h);
+    (void) fwrite(buf, 1, h.len, fscript);
+
+    free(buf);
+}
 
 int
 ttyrec_main (int game, char *username, char *ttyrec_path, char* ttyrec_filename)
@@ -143,7 +181,8 @@ ttyrec_main (int game, char *username, char *ttyrec_path, char* ttyrec_filename)
         {
           close (slave);
           ipfile = gen_inprogress_lock (game, child, ttyrec_filename);
-          dooutput (myconfig[game]->max_idle_time_seconds);
+	  ttyrec_id(game, username, ttyrec_filename);
+          dooutput (myconfig[game]->max_idle_time);
         }
       else
 	  doshell (game, username);
@@ -166,7 +205,7 @@ ttyrec_main (int game, char *username, char *ttyrec_path, char* ttyrec_filename)
 	  sleep(1);
   }
 
-  unlink (ipfile);
+  remove_ipfile();
   child = 0;
 
   return 0;
@@ -200,87 +239,16 @@ finish (int sig)
 
   if (die)
   {
-      if (wait_for_menu && input_child)
+      if (input_child)
       {
 	  // Need to kill the child that's writing input to pty.
 	  kill(input_child, SIGTERM);
 	  while ((pid = wait3(&status, WNOHANG, 0)) > 0);
-	  wait_for_menu = 0;
       }
       else
 	  done ();
   }
-}
-
-struct linebuf
-{
-  char str[BUFSIZ + 1];         /* + 1 for an additional NULL character. */
-  int len;
-};
-
-
-void
-check_line (const char *line)
-{
-  static int uuencode_mode = 0;
-  static FILE *uudecode;
-
-  if (uuencode_mode == 1)
-    {
-      fprintf (uudecode, "%s", line);
-      if (strcmp (line, "end\n") == 0)
-        {
-          pclose (uudecode);
-          uuencode_mode = 0;
-        }
-    }
-  else
-    {
-      int dummy;
-      char dummy2[BUFSIZ];
-      if (sscanf (line, "begin %o %s", &dummy, dummy2) == 2)
-        {
-          /*
-           * uuencode line found!
-           */
-          uudecode = popen ("uudecode", "w");
-          fprintf (uudecode, "%s", line);
-          uuencode_mode = 1;
-        }
-    }
-}
-
-void
-check_output (const char *str, int len)
-{
-  static struct linebuf lbuf = { "", 0 };
-  int i;
-
-  for (i = 0; i < len; i++)
-    {
-      if (lbuf.len < BUFSIZ)
-        {
-          lbuf.str[lbuf.len] = str[i];
-          if (lbuf.str[lbuf.len] == '\r')
-            {
-              lbuf.str[lbuf.len] = '\n';
-            }
-          lbuf.len++;
-          if (lbuf.str[lbuf.len - 1] == '\n')
-            {
-              if (lbuf.len > 1)
-                {               /* skip a blank line. */
-                  lbuf.str[lbuf.len] = '\0';
-                  check_line (lbuf.str);
-                }
-              lbuf.len = 0;
-            }
-        }
-      else
-        {                       /* buffer overflow */
-          lbuf.len = 0;
-        }
-    }
+  wait_for_menu = 0;
 }
 
 void
@@ -291,7 +259,7 @@ game_idle_kill(int signal)
 }
 
 void
-dooutput (int max_idle_time_seconds)
+dooutput (int max_idle_time)
 {
   int cc;
   time_t tvec, time ();
@@ -310,11 +278,9 @@ dooutput (int max_idle_time_seconds)
       if (cc <= 0)
         break;
 
-      if (max_idle_time_seconds)
-          alarm(max_idle_time_seconds);
+      if (max_idle_time)
+          alarm(max_idle_time);
 
-      if (uflg)
-        check_output (obuf, cc);
       h.len = cc;
       gettimeofday (&h.tv, NULL);
       (void) write (1, obuf, cc);
@@ -393,7 +359,7 @@ done ()
       (void) tcsetattr (0, TCSAFLUSH, &tt);
     }
 
-  unlink(ipfile);
+  remove_ipfile();
   graceful_exit (0);
 }
 
@@ -437,6 +403,10 @@ getslave ()
 void
 remove_ipfile (void)
 {
-  if (ipfile != NULL)
-    unlink (ipfile);
+    if (ipfile != NULL) {
+	unlink (ipfile);
+	free(ipfile);
+	ipfile = NULL;
+    }
+    signal(SIGALRM, SIG_IGN);
 }
