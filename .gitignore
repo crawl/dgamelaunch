@@ -2,7 +2,10 @@
 # The above comment makes vim treat this file as a configuration file
 
 *.[oa]
+*.sw[op]
 .depend
+*.tab.c
+*.output
 
 # The DGameLaunch and editor binaries
 dgamelaunch
