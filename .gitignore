@@ -6,6 +6,8 @@
 .depend
 *.tab.c
 *.output
+\#*
+.#*
 
 # The DGameLaunch and editor binaries
 dgamelaunch
