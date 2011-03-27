@@ -60,6 +60,7 @@
 #include <libgen.h>
 #include <stdlib.h>
 #include <curses.h>
+#include <locale.h>
 
 #ifdef USE_SQLITE3
 # include <sqlite3.h>
@@ -2593,6 +2594,8 @@ main (int argc, char** argv)
 	  graceful_exit (1);
 	}
     }
+
+  setlocale(LC_CTYPE, "en_US.UTF-8");
 
   if (wall_email_str) {
       char *emailfrom = wall_email_str;
