@@ -1048,6 +1048,7 @@ inprogressmenu (int gameid)
 	    break;
 
 	case 12: case 18: /* ^L, ^R */
+	  write(1, "\033%G", 3);
 	  clear ();
 	  break;
 
@@ -1085,6 +1086,7 @@ watchgame:
               clear ();
               refresh ();
               endwin ();
+              write(1, "\033%G", 3);
 #ifdef USE_SHMEM
 	      signals_block();
 	      if (games[idx]->is_in_shm) {
@@ -1538,6 +1540,7 @@ initcurses ()
   init_pair(1, -1, -1);
   init_pair(2, COLOR_RED, -1);
 #endif
+  write(1, "\033%G", 3);
   clear();
   refresh();
 }
@@ -2380,6 +2383,7 @@ runmenuloop(struct dg_menu *menu)
     while (1) {
 	if (doclear) {
 	    doclear = 0;
+	    write(1, "\033%G", 3);
 	    clear();
 	}
 	drawbanner(&ban, 1, 0);
