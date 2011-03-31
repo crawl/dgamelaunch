@@ -660,7 +660,7 @@ static void query_encoding(int game, char *username)
         fprintf(stderr, "Error: can't obtain charset info.\nPress any key...\n");
         read(0, buf, 1);
         close(p[0]); // SIGPIPE
-        kill(son, SIGTERM); // and SIGTERM for a good measure
+        kill(son, SIGKILL); // and SIGTERM for a good measure
         waitpid(son, 0, 0);
         ancient_encoding = 0;
         return;
@@ -671,7 +671,7 @@ static void query_encoding(int game, char *username)
     read(p[0], buf, sizeof(buf)-1);
     buf[sizeof(buf)-1] = 0;
     close(p[0]);
-    kill(son, SIGTERM);
+    kill(son, SIGKILL);
     waitpid(son, 0, 0);
     if (strchr(buf, '\n'))
         *strchr(buf, '\n') = 0;
