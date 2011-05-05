@@ -100,6 +100,7 @@ extern int yyparse ();
 
 char * __progname;
 int  g_idle_alarm_enabled = 0;
+int  showplayers = 0;
 void (*g_chain_winch)(int);
 
 #ifndef USE_SQLITE3
@@ -784,7 +785,10 @@ game_get_column_data(struct dg_game *game,
         break;
 
     case SORTMODE_WINDOWSIZE:
-        snprintf(data, bufsz, "%3dx%3d", game->ws_col, game->ws_row);
+	if (showplayers)
+		snprintf(data, bufsz, "%dx%d", game->ws_col, game->ws_row);
+	else
+		snprintf(data, bufsz, "%3dx%3d", game->ws_col, game->ws_row);
         if ((game->ws_col > COLS || game->ws_row > LINES))
             *hilite = CLR_RED;
         break;
@@ -799,6 +803,12 @@ game_get_column_data(struct dg_game *game,
         long secs, mins, hours;
 
         secs = (ctime - game->idle_time);
+
+	if (showplayers) {
+		snprintf(data, 10, "%ld", secs);
+		break;
+	}
+
         hours = (secs / 3600);
         secs -= (hours * 3600);
         mins = (secs / 60) % 60;
@@ -1161,7 +1171,7 @@ watchgame:
 void
 inprogressdisplay (int gameid)
 {
-    const char *selectorchars = "abcdefghijklmnoprstuvwxyzABCDEFGHIJKLMNOPRSTUVWXYZ";
+    const char *selectorchars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPRSTUVWXYZ";
   int i, len = 20;
   static dg_sortmode sortmode = NUM_SORTMODES;
   struct dg_game **games = NULL;
@@ -1194,6 +1204,8 @@ inprogressdisplay (int gameid)
 
     for (curr_watchcol = watchcols; *curr_watchcol; ++curr_watchcol) {
       struct dg_watchcols *col = *curr_watchcol;
+      if ((dg_sortmode)col->dat == SORTMODE_NONE)
+        continue;
       char tmpbuf[80];
       int hilite = 0;
       game_get_column_data(games[i],
@@ -2486,7 +2498,6 @@ main (int argc, char** argv)
   unsigned int len;
   int c, i;
   int userchoice;
-  int showplayers = 0;
   char *tmp;
   char *wall_email_str = NULL;
 #ifdef USE_RLIMIT
