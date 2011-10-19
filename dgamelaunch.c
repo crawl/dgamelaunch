@@ -2521,18 +2521,18 @@ main (int argc, char** argv)
   argv = saved_argv;
 #endif
 
-  p = getenv("USER");
+  p = getenv("DGLAUTH");
 
   /* Linux telnetd allows importing the USER envvar via telnet,
    * while FreeBSD does not.  FreeBSD, on the other hand, does allow
    * the LOGNAME envvar.  Check USER first, then LOGNAME.
    */
   if (p == NULL) {
-      p = getenv("LOGNAME");
+      p = getenv("USER");
   }
 
   if (p == NULL) {
-      p = getenv("DGLAUTH");
+      p = getenv("LOGNAME");
   }
 
   if (p && *p != '\0')
