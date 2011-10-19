@@ -2539,6 +2539,9 @@ main (int argc, char** argv)
     auth = strdup(p);
   /* else auth is still NULL */
 
+  /* just to be sure */
+  unsetenv("DGLAUTH"); unsetenv("USER"); unsetenv("LOGNAME");
+
   __progname = basename(strdup(argv[0]));
 
   while ((c = getopt(argc, argv, "sqh:pf:i:aeW:SD")) != -1)
