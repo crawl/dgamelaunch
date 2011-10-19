@@ -2531,6 +2531,10 @@ main (int argc, char** argv)
       p = getenv("LOGNAME");
   }
 
+  if (p == NULL) {
+      p = getenv("DGLAUTH");
+  }
+
   if (p && *p != '\0')
     auth = strdup(p);
   /* else auth is still NULL */
