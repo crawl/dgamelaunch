@@ -2544,7 +2544,7 @@ main (int argc, char** argv)
 
   __progname = basename(strdup(argv[0]));
 
-  while ((c = getopt(argc, argv, "sqh:pf:i:aeW:SD")) != -1)
+  while ((c = getopt(argc, argv, "sqh:pi:aeW:SD")) != -1)
   {
     switch (c)
     {
@@ -2553,17 +2553,6 @@ main (int argc, char** argv)
 
       case 'q':
 	silent = 1; break;
-
-      case 'f':
-	if (config)
-	{
-	  if (!silent)
-	    fprintf(stderr, "warning: using %s\n", argv[optind]);
-	  free(config);
-	}
-
-	config = strdup(optarg);
-	break;
 
       case 'i':
 	if (optarg && *optarg != '\0') {
