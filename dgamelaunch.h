@@ -21,7 +21,14 @@
 
 #define DGL_PLAYERNAMELEN 30 /* max. length of player name */
 #define DGL_PASSWDLEN 20 /* max. length of passwords */
+#define DGL_CRYPTLEN 128 /* max. length of encrypted password */
 #define DGL_MAILMSGLEN 78 /* max. length of mail message */
+
+#define DGL_PWALG "6"  /* glibc crypt algorithm; "" for traditional DES */
+#define DGL_SALTLEN 16 /* number of characters of salt */
+
+/* number of 32-bit words needed to fill the salt */
+#define DGL_SALT_WORDS ((DGL_SALTLEN * 6 + 31) / 32)
 
 #define DGL_MAXWATCHCOLS 10
 

@@ -90,6 +90,7 @@
 #include <signal.h>
 #include <assert.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <unistd.h>
 #include <termios.h>
 
@@ -1329,6 +1330,77 @@ change_email ()
   }
 }
 
+char
+base64 (int value)
+{
+  int digit = value & 0x3f;
+
+  if (digit < 2)
+    return digit + '.';
+
+  digit -= 2;
+  if (digit < 10)
+    return digit + '0';
+
+  digit -= 10;
+  if (digit < 26)
+    return digit + 'A';
+
+  digit -= 26;
+  return digit + 'a';
+}
+
+const char *
+make_salt (void)
+{
+  static char salt[DGL_SALTLEN + 1];
+  static char saltstr[DGL_SALTLEN + 6];
+  uint32_t randoms[DGL_SALT_WORDS];
+  size_t nread = 0;
+  FILE *urand = fopen("/dev/urandom", "r");
+  if (!urand) {
+    debug_write("opening /dev/urandom");
+    graceful_exit(124);
+  }
+ 
+  nread = fread(randoms, sizeof(uint32_t), DGL_SALT_WORDS, urand);
+  if (nread != DGL_SALT_WORDS) {
+    debug_write("short read from /dev/urandom");
+    graceful_exit(125);
+  }
+  fclose(urand);
+
+  if (*DGL_PWALG == '\0') {
+    salt[0] = base64(randoms[0]);
+    salt[1] = base64(randoms[1]);
+    salt[2] = '\0';
+    return salt;
+  }
+
+  int bits = 0;
+  int idx = 0;
+
+  while (bits < DGL_SALTLEN * 6) {
+    int firstbit = bits & 0x1f;
+    int lastbit = (bits + 6) & 0x1f;
+    unsigned val = randoms[bits/32];
+
+    // including a few from the next word
+    if (lastbit > firstbit) {
+      val >>= (32 - lastbit);
+    } else {
+      val <<= 6 - (32 - firstbit);
+      val |= randoms[bits/32 + 1] >> (32 - lastbit);
+    }
+
+    salt[bits / 6] = base64(val);
+    bits += 6;
+  }
+  salt[bits/6] = '\0';
+  sprintf(saltstr, "$%s$%s$", DGL_PWALG, salt);
+  return saltstr;
+}
+
 int
 changepw (int dowrite)
 {
@@ -1398,7 +1470,7 @@ changepw (int dowrite)
     }
 
   free(me->password);
-  me->password = strdup (crypt (buf, buf));
+  me->password = strdup (crypt (buf, make_salt()));
 
   if (dowrite)
     writefile (0);
@@ -1880,9 +1952,9 @@ passwordgood (char *cpw)
 {
   assert (me != NULL);
 
-  if (!strncmp (crypt (cpw, cpw), me->password, DGL_PASSWDLEN))
+  if (!strncmp (crypt (cpw, me->password), me->password, DGL_CRYPTLEN))
     return 1;
-  if (!strncmp (cpw, me->password, DGL_PASSWDLEN))
+  if (!strncmp (cpw, me->password, DGL_CRYPTLEN))
     return 1;
 
   return 0;
@@ -1935,7 +2007,7 @@ readfile (int nolock)
       users[f_num] = malloc (sizeof (struct dg_user));
       users[f_num]->username = (char *) calloc (DGL_PLAYERNAMELEN+2, sizeof (char));
       users[f_num]->email = (char *) calloc (82, sizeof (char));
-      users[f_num]->password = (char *) calloc (DGL_PASSWDLEN+2, sizeof (char));
+      users[f_num]->password = (char *) calloc (DGL_CRYPTLEN+1, sizeof (char));
       users[f_num]->env = (char *) calloc (1026, sizeof (char));
 
       /* name field, must be valid */
@@ -1975,7 +2047,7 @@ readfile (int nolock)
         {
           users[f_num]->password[(b - n)] = *b;
           b++;
-          if ((b - n) >= DGL_PASSWDLEN) {
+          if ((b - n) >= DGL_CRYPTLEN) {
 	      debug_write("passwd field too long");
             graceful_exit (102);
 	  }
