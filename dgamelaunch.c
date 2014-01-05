@@ -2616,8 +2616,13 @@ main (int argc, char** argv)
 
   __progname = basename(strdup(argv[0]));
 
-  while ((c = getopt(argc, argv, "sqh:pi:aeW:SD")) != -1)
+  while ((c = getopt(argc, argv, "csqh:pi:aeW:SD")) != -1)
   {
+    /* Stop processing arguments at -c, so that user-provided
+     * commands (via ssh for example) to the dgamelaunch login
+     * shell are ignored.
+     */
+    if (c == 'c') break;
     switch (c)
     {
       case 's':
