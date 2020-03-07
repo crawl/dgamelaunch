@@ -8,8 +8,8 @@ sbindir = @sbindir@
 mandir = @mandir@
 
 CC = @CC@
-LIBS = @LIBS@
-CFLAGS = @CFLAGS@
+LIBS = @LIBS@ -pthread
+CFLAGS = @CFLAGS@ -I/usr/include/ncursesw
 INSTALL = @INSTALL@
 LEX = @LEX@
 YACC = @YACC@
